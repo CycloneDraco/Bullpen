@@ -417,6 +417,9 @@ async function loadMe() {
   return me;
 }
 export async function signIn(name) { await store.signIn(name); me = null; return loadMe(); }
+export async function signInEmail(email, password) { await store.signInEmail(email, password); me = null; return loadMe(); }
+export async function signUpEmail(name, email, password) { await store.signUpEmail(name, email, password); me = null; return loadMe(); }
+export const resetPassword = email => store.resetPassword(email);
 export async function signOut() { await store.signOut(); me = null; }
 
 // ---------- routes ----------

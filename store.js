@@ -13,18 +13,19 @@ async function firebaseStore(cfg) {
   const d = (...p) => F.doc(db, ...p);
   const data = s => s.exists() ? { id: s.id, ...s.data() } : null;
   let user = null;
-  const ready = new Promise(res => A.onAuthStateChanged(auth, u => {
-    user = u && { id: u.uid, name: u.displayName || u.email, email: u.email, picture: u.photoURL };
-    res();
-  }));
+  const toUser = (u, name) => u && { id: u.uid, name: name || u.displayName || u.email.split('@')[0], email: u.email, picture: u.photoURL, provider: u.providerData[0]?.providerId === 'password' ? 'email' : 'google' };
+  const ready = new Promise(res => A.onAuthStateChanged(auth, u => { user = toUser(u); res(); }));
   return {
     mode: 'firebase', ready,
     currentUser: () => user,
-    async signIn() {
-      const r = await A.signInWithPopup(auth, new A.GoogleAuthProvider());
-      user = { id: r.user.uid, name: r.user.displayName || r.user.email, email: r.user.email, picture: r.user.photoURL };
-      return user;
+    async signIn() { return user = toUser((await A.signInWithPopup(auth, new A.GoogleAuthProvider())).user); },
+    async signInEmail(email, password) { return user = toUser((await A.signInWithEmailAndPassword(auth, email, password)).user); },
+    async signUpEmail(name, email, password) {
+      const { user: u } = await A.createUserWithEmailAndPassword(auth, email, password);
+      await A.updateProfile(u, { displayName: name });
+      return user = toUser(u, name);
     },
+    resetPassword: email => A.sendPasswordResetEmail(auth, email),
     signOut: () => A.signOut(auth).then(() => { user = null; }),
     getUser: async uid => data(await F.getDoc(d('users', uid))),
     saveUser: (uid, u) => F.setDoc(d('users', uid), u, { merge: true }),

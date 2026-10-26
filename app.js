@@ -1,5 +1,5 @@
 // Bullpen front end — vanilla JS single-page app with hash routing.
-import { api as backend, store, signIn, signOut } from './backend.js';
+import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut } from './backend.js';
 import CONFIG from './config.js';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -143,7 +143,16 @@ function viewSignIn() {
     <h1>Trade the real market.<br>Risk nothing.</h1>
     <p>Practice investing with $100,000 in virtual cash, live market prices, and games against friends.</p>
     <div class="signin-box">
-      ${google ? `<button class="btn block" id="gbtn" style="max-width:320px"><svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#fff" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/></svg>Continue with Google</button>`
+      ${google ? `<button class="btn block" id="gbtn" style="max-width:320px"><svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#fff" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/></svg>Continue with Google</button>
+        <div class="or">or use email</div>
+        <form id="email" class="stack" style="width:100%;max-width:320px;text-align:left" novalidate>
+          <div class="seg full" id="emode"><button type="button" data-v="in" class="on">Sign in</button><button type="button" data-v="up">Create account</button></div>
+          <label class="field" data-up hidden><span>Name</span><input name="name" autocomplete="name" placeholder="Shown in game rankings"></label>
+          <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required></label>
+          <label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="6" required><div class="hint" data-up hidden>At least 6 characters.</div></label>
+          <button class="btn block" id="esubmit">Sign in</button>
+          <button type="button" class="btn ghost" id="forgot" style="align-self:center">Forgot password?</button>
+        </form>`
       : `<p class="small muted" style="margin:0">Offline mode: your portfolios are saved in this browser only. Add Firebase to <code>config.js</code> for Google sign-in and games with friends.</p>
         <form id="demo" class="row" style="width:100%;max-width:340px"><input name="name" placeholder="Your name" aria-label="Your name" required style="flex:1"><button class="btn">Start</button></form>`}
       ${CONFIG.finnhubKey ? '' : '<p class="small down" style="margin:0">Live prices need a Finnhub key in <code>config.js</code>.</p>'}
@@ -154,6 +163,37 @@ function viewSignIn() {
   $('#gbtn')?.addEventListener('click', async () => {
     try { await signIn(); await done(); } catch (e) { if (e.code !== 'auth/popup-closed-by-user') toast(e.code === 'auth/unauthorized-domain' ? 'Add this site to Firebase → Authentication → Settings → Authorized domains.' : e.message, true); }
   });
+  const authError = e => ({
+    'auth/invalid-credential': 'Wrong email or password.', 'auth/wrong-password': 'Wrong email or password.', 'auth/user-not-found': 'No account with that email. Create one instead.',
+    'auth/email-already-in-use': 'An account with this email already exists. Sign in instead.', 'auth/weak-password': 'Use a password with at least 6 characters.',
+    'auth/invalid-email': 'That email address doesn’t look right.', 'auth/missing-password': 'Enter your password.', 'auth/too-many-requests': 'Too many attempts. Wait a minute and try again.',
+    'auth/operation-not-allowed': 'Email sign-in isn’t turned on yet. Enable Email/Password in Firebase → Authentication → Sign-in method.',
+  }[e.code] || e.message);
+  const ef = $('#email');
+  if (ef) {
+    let mode = 'in';
+    $$('#emode button').forEach(b => b.onclick = () => {
+      mode = b.dataset.v;
+      $$('#emode button').forEach(x => x.classList.toggle('on', x === b));
+      $$('[data-up]', ef).forEach(x => x.hidden = mode !== 'up');
+      ef.password.autocomplete = mode === 'up' ? 'new-password' : 'current-password';
+      $('#esubmit').textContent = mode === 'up' ? 'Create account' : 'Sign in';
+      $('#forgot').hidden = mode === 'up';
+    });
+    ef.addEventListener('submit', async e => {
+      e.preventDefault();
+      const email = ef.email.value.trim(), pw = ef.password.value, name = ef.name.value.trim();
+      if (mode === 'up' && !name) return toast('Enter your name.', true);
+      const btn = $('#esubmit'); btn.disabled = true;
+      try { mode === 'up' ? await signUpEmail(name, email, pw) : await signInEmail(email, pw); await done(); }
+      catch (err) { toast(authError(err), true); btn.disabled = false; }
+    });
+    $('#forgot').onclick = async () => {
+      const email = ef.email.value.trim();
+      if (!email) return toast('Type your email above first.', true);
+      try { await resetPassword(email); toast(`If ${email} has an account, a reset link is on its way.`); } catch (err) { toast(authError(err), true); }
+    };
+  }
   $('#demo')?.addEventListener('submit', async e => {
     e.preventDefault();
     try { await signIn(e.target.name.value); await done(); } catch (err) { toast(err.message, true); }
@@ -601,7 +641,7 @@ function viewSettings() {
       <label class="field" style="margin-top:12px"><span>Default chart range</span><select data-k="defaultRange">${['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y'].map(r => `<option ${p.defaultRange === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
       <label class="field" style="margin-top:12px"><span>Default game</span><select data-k="defaultGame"><option value="">Last used</option>${state.games.mine.map(g => `<option value="${g.id}" ${p.defaultGame === g.id ? 'selected' : ''}>${esc(g.settings.name)}</option>`).join('')}</select></label>
     </div>
-    <div class="card"><h2 style="margin-bottom:10px">Account</h2><div class="row"><div class="avatar" style="width:48px;height:48px;font-size:1.2rem;display:grid;place-items:center;background-image:${state.me.picture ? `url('${esc(state.me.picture)}')` : 'none'}">${state.me.picture ? '' : esc(state.me.name[0])}</div><div><b>${esc(state.me.name)}</b><div class="muted small">${esc(state.me.email || 'Offline account')}</div><div class="muted small">${store.mode === 'firebase' ? 'Signed in with Google' : 'Offline mode (this browser only)'}</div></div></div></div>
+    <div class="card"><h2 style="margin-bottom:10px">Account</h2><div class="row"><div class="avatar" style="width:48px;height:48px;font-size:1.2rem;display:grid;place-items:center;background-image:${state.me.picture ? `url('${esc(state.me.picture)}')` : 'none'}">${state.me.picture ? '' : esc(state.me.name[0])}</div><div><b>${esc(state.me.name)}</b><div class="muted small">${esc(state.me.email || 'Offline account')}</div><div class="muted small">${store.mode !== 'firebase' ? 'Offline mode (this browser only)' : store.currentUser()?.provider === 'email' ? 'Signed in with email' : 'Signed in with Google'}</div></div></div></div>
   </div></div>`;
   $$('.seg[data-k]').forEach(sg => $$('button', sg).forEach(b => b.onclick = async () => { $$('button', sg).forEach(x => x.classList.toggle('on', x === b)); await savePrefs({ [sg.dataset.k]: b.dataset.v }); }));
   $$('input[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.checked }).then(() => toast('Saved.')));

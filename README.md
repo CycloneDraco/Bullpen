@@ -1,6 +1,6 @@
 # Bullpen
 
-A stock market simulator: paper-trade real stocks with live prices, compete in games with friends, and sign in with Google.
+A stock market simulator: paper-trade real stocks and options with live prices, compete in games with friends, and sign in with Google or email.
 
 **Live site:** https://cyclonedraco.github.io/Bullpen/
 
@@ -11,7 +11,7 @@ It's a static site on GitHub Pages, so there's no server to run. Prices come fro
 Until you do this, the site runs in **offline mode**: you sign in with just a name, and portfolios are saved only in that browser.
 
 1. Go to https://console.firebase.google.com → **Create a project** (Google Analytics is optional).
-2. **Build → Authentication → Get started → Sign-in method → Google → Enable → Save.**
+2. **Build → Authentication → Get started → Sign-in method → Google → Enable → Save.** Then **Add new provider → Email/Password → Enable → Save** so people can also sign up with an email and password.
 3. Still in Authentication: **Settings → Authorized domains → Add domain** → `cyclonedraco.github.io`.
 4. **Build → Firestore Database → Create database** → pick a location → **Start in production mode**.
 5. In Firestore open the **Rules** tab, replace everything with the contents of [`firestore.rules`](firestore.rules), and click **Publish**.
