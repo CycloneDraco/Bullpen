@@ -1,0 +1,44 @@
+rules_version = '2';
+// Paste into Firebase console → Firestore Database → Rules, then Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function game(gid) { return /databases/$(database)/documents/games/$(gid); }
+
+    match /users/{uid} {
+      allow read, write: if request.auth.uid == uid;
+    }
+
+    match /games/{gid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.members == [request.auth.uid];
+      allow delete: if request.auth.uid == resource.data.owner;
+      // The owner edits settings; anyone else may only add or remove themselves from members.
+      allow update: if request.auth.uid == resource.data.owner
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+          && ((request.resource.data.members.toSet() == resource.data.members.toSet().union([request.auth.uid].toSet())
+               && existsAfter(/databases/$(database)/documents/games/$(gid)/players/$(request.auth.uid)))
+            || request.resource.data.members.toSet() == resource.data.members.toSet().difference([request.auth.uid].toSet())));
+
+      // Game password, readable only by the game owner.
+      match /private/{doc} {
+        allow read: if request.auth.uid == get(game(gid)).data.owner;
+        allow write: if request.auth.uid == getAfter(game(gid)).data.owner
+          || request.auth.uid == get(game(gid)).data.owner;
+      }
+
+      match /players/{uid} {
+        allow read: if signedIn();
+        // Joining needs the password when the game has one (the owner joins at creation).
+        allow create: if request.auth.uid == uid && (
+          getAfter(game(gid)).data.owner == uid
+          || !exists(/databases/$(database)/documents/games/$(gid)/private/secret)
+          || get(/databases/$(database)/documents/games/$(gid)/private/secret).data.password == request.resource.data.joinPassword);
+        allow update: if request.auth.uid == uid;
+        allow delete: if request.auth.uid == uid || request.auth.uid == get(game(gid)).data.owner;
+      }
+    }
+  }
+}

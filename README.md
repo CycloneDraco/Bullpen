@@ -1,1 +1,48 @@
 # Bullpen
+
+A stock market simulator: paper-trade real stocks with live prices, compete in games with friends, and sign in with Google.
+
+**Live site:** https://cyclonedraco.github.io/Bullpen/
+
+It's a static site on GitHub Pages, so there's no server to run. Prices come from [Finnhub](https://finnhub.io), charts from TradingView's free widget, and accounts and games from [Firebase](https://firebase.google.com) (free plan).
+
+## Turn on Google sign-in and multiplayer (about 5 minutes)
+
+Until you do this, the site runs in **offline mode**: you sign in with just a name, and portfolios are saved only in that browser.
+
+1. Go to https://console.firebase.google.com → **Create a project** (Google Analytics is optional).
+2. **Build → Authentication → Get started → Sign-in method → Google → Enable → Save.**
+3. Still in Authentication: **Settings → Authorized domains → Add domain** → `cyclonedraco.github.io`.
+4. **Build → Firestore Database → Create database** → pick a location → **Start in production mode**.
+5. In Firestore open the **Rules** tab, replace everything with the contents of [`firestore.rules`](firestore.rules), and click **Publish**.
+6. **Project settings (gear icon) → General → Your apps → Web (`</>`)** → register an app (no hosting needed). Copy the `firebaseConfig` object.
+7. In this repo, edit [`config.js`](config.js) and replace `firebase: null` with what you copied, for example:
+   ```js
+   firebase: {
+     apiKey: "AIza...",
+     authDomain: "your-project.firebaseapp.com",
+     projectId: "your-project",
+     storageBucket: "your-project.appspot.com",
+     messagingSenderId: "123...",
+     appId: "1:123...:web:abc..."
+   },
+   ```
+8. Commit. GitHub Pages redeploys in about a minute.
+
+## Features
+- **Live prices** for US stocks and ETFs (Finnhub, refreshed about every 20 s) and interactive TradingView charts.
+- **Orders:** buy, sell, short, cover · market, limit, stop, trailing stop ($ or %) · day or good-'til-cancelled. Market orders placed while the market is closed fill at the open.
+- **Games:** a practice portfolio for everyone, plus public or password-protected games with invite links, live rankings and viewable portfolios.
+- **Game settings:** start/end dates, starting cash, flat or % commission, interest on cash, margin and margin interest, short selling and a minimum short price, each order type on/off, ETFs, a minimum stock price, max position %, a daily trade limit, late entry, portfolio resets, portfolio visibility.
+- **Your settings:** theme, accent colour, gain/loss colours, density, compact numbers, trade confirmation, default chart range, default game.
+
+## Limits
+- With no server, pending limit/stop orders are checked only while their owner has Bullpen open. When they reopen it, orders are checked against the current price, not prices from while they were away.
+- Finnhub's free plan allows 60 requests a minute, so very large watchlists can briefly show stale prices.
+- Every player saves their own portfolio, so a determined friend could edit their own cash with developer tools. Fine for friendly games, not for prize money.
+
+## Run locally
+```bash
+python3 -m http.server 8080
+```
+Then open http://localhost:8080 (localhost is already an authorized Firebase domain).

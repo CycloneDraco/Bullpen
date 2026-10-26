@@ -1,0 +1,116 @@
+// Storage + auth adapters. Firebase (Google sign-in, shared Firestore) when configured,
+// otherwise an offline adapter that keeps everything in this browser's localStorage.
+import CONFIG from './config.js';
+
+const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
+
+async function firebaseStore(cfg) {
+  const [{ initializeApp }, A, F] = await Promise.all([
+    import(FB + 'firebase-app.js'), import(FB + 'firebase-auth.js'), import(FB + 'firebase-firestore.js'),
+  ]);
+  const app = initializeApp(cfg);
+  const auth = A.getAuth(app), db = F.getFirestore(app);
+  const d = (...p) => F.doc(db, ...p);
+  const data = s => s.exists() ? { id: s.id, ...s.data() } : null;
+  let user = null;
+  const ready = new Promise(res => A.onAuthStateChanged(auth, u => {
+    user = u && { id: u.uid, name: u.displayName || u.email, email: u.email, picture: u.photoURL };
+    res();
+  }));
+  return {
+    mode: 'firebase', ready,
+    currentUser: () => user,
+    async signIn() {
+      const r = await A.signInWithPopup(auth, new A.GoogleAuthProvider());
+      user = { id: r.user.uid, name: r.user.displayName || r.user.email, email: r.user.email, picture: r.user.photoURL };
+      return user;
+    },
+    signOut: () => A.signOut(auth).then(() => { user = null; }),
+    getUser: async uid => data(await F.getDoc(d('users', uid))),
+    saveUser: (uid, u) => F.setDoc(d('users', uid), u, { merge: true }),
+    getGame: async gid => data(await F.getDoc(d('games', gid))),
+    async createGame(g, password, player) {
+      const b = F.writeBatch(db);
+      b.set(d('games', g.id), g);
+      if (password) b.set(d('games', g.id, 'private', 'secret'), { password });
+      b.set(d('games', g.id, 'players', player.userId), player);
+      await b.commit();
+    },
+    async updateGame(gid, patch, password) {
+      await F.updateDoc(d('games', gid), patch);
+      if (password === undefined) return;
+      if (password) await F.setDoc(d('games', gid, 'private', 'secret'), { password });
+      else await F.deleteDoc(d('games', gid, 'private', 'secret'));
+    },
+    async getSecret(gid) { try { return data(await F.getDoc(d('games', gid, 'private', 'secret')))?.password || ''; } catch { return ''; } },
+    async deleteGame(gid) {
+      const ps = await F.getDocs(F.collection(db, 'games', gid, 'players'));
+      await Promise.all(ps.docs.map(p => F.deleteDoc(p.ref)));
+      await F.deleteDoc(d('games', gid, 'private', 'secret')).catch(() => {});
+      await F.deleteDoc(d('games', gid));
+    },
+    myGames: async uid => (await F.getDocs(F.query(F.collection(db, 'games'), F.where('members', 'array-contains', uid)))).docs.map(data),
+    publicGames: async () => (await F.getDocs(F.query(F.collection(db, 'games'), F.where('settings.privacy', '==', 'public'), F.limit(100)))).docs.map(data),
+    getPlayer: async (gid, uid) => data(await F.getDoc(d('games', gid, 'players', uid))),
+    listPlayers: async gid => (await F.getDocs(F.collection(db, 'games', gid, 'players'))).docs.map(data),
+    savePlayer: (gid, uid, p) => F.setDoc(d('games', gid, 'players', uid), p),
+    async join(gid, player, password) {
+      const b = F.writeBatch(db);
+      b.set(d('games', gid, 'players', player.userId), { ...player, joinPassword: password || '' });
+      b.update(d('games', gid), { members: F.arrayUnion(player.userId) });
+      try { await b.commit(); } catch (e) { throw new Error(e.code === 'permission-denied' ? 'Incorrect game password.' : e.message); }
+    },
+    async leave(gid, uid) {
+      const b = F.writeBatch(db);
+      b.delete(d('games', gid, 'players', uid));
+      b.update(d('games', gid), { members: F.arrayRemove(uid) });
+      await b.commit();
+    },
+  };
+}
+
+function localStore() {
+  const KEY = 'bullpen_db';
+  const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
+  const db = { users: {}, games: {}, players: {}, secrets: {}, session: null, ...load() };
+  const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} };
+  const clone = x => x && JSON.parse(JSON.stringify(x));
+  return {
+    mode: 'local', ready: Promise.resolve(),
+    currentUser: () => db.session && db.users[db.session] ? { id: db.session, ...db.users[db.session] } : null,
+    async signIn(name) {
+      const id = 'local_' + name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30);
+      db.users[id] = { ...db.users[id], name: name.trim(), email: '' }; db.session = id; persist();
+      return { id, ...db.users[id] };
+    },
+    async signOut() { db.session = null; persist(); },
+    getUser: async uid => db.users[uid] ? clone({ id: uid, ...db.users[uid] }) : null,
+    async saveUser(uid, u) { db.users[uid] = { ...db.users[uid], ...clone(u) }; persist(); },
+    getGame: async gid => clone(db.games[gid]) || null,
+    async createGame(g, password, player) {
+      db.games[g.id] = clone(g); db.players[g.id] = { [player.userId]: clone(player) };
+      if (password) db.secrets[g.id] = password; persist();
+    },
+    async updateGame(gid, patch, password) {
+      Object.assign(db.games[gid], clone(patch));
+      if (password !== undefined) password ? db.secrets[gid] = password : delete db.secrets[gid];
+      persist();
+    },
+    getSecret: async gid => db.secrets[gid] || '',
+    async deleteGame(gid) { delete db.games[gid]; delete db.players[gid]; delete db.secrets[gid]; persist(); },
+    myGames: async uid => Object.values(db.games).filter(g => g.members.includes(uid)).map(clone),
+    publicGames: async () => Object.values(db.games).filter(g => g.settings.privacy === 'public').map(clone),
+    getPlayer: async (gid, uid) => clone(db.players[gid]?.[uid]) || null,
+    listPlayers: async gid => Object.values(db.players[gid] || {}).map(clone),
+    async savePlayer(gid, uid, p) { (db.players[gid] ||= {})[uid] = clone(p); persist(); },
+    async join(gid, player, password) {
+      if (db.secrets[gid] && db.secrets[gid] !== password) throw new Error('Incorrect game password.');
+      (db.players[gid] ||= {})[player.userId] = clone(player);
+      if (!db.games[gid].members.includes(player.userId)) db.games[gid].members.push(player.userId);
+      persist();
+    },
+    async leave(gid, uid) { delete db.players[gid]?.[uid]; db.games[gid].members = db.games[gid].members.filter(m => m !== uid); persist(); },
+  };
+}
+
+export const store = CONFIG.firebase ? await firebaseStore(CONFIG.firebase) : localStore();
