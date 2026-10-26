@@ -981,8 +981,9 @@ const mustAdmin = user => { if (!user.admin) throw httpError(403, 'Admin mode is
 route('POST', '/api/admin/unlock', async ({ user, body }) => {
   if (await sha256(String(body.password || '')) !== ADMIN_HASH) throw httpError(403, 'Wrong password.');
   try { localStorage.setItem('bp_admin', user.id); } catch {}
-  user.admin = await store.isAdmin(user.id).catch(() => false);
-  return { admin: user.admin, uid: user.id, mode: store.mode };
+  const status = await store.adminStatus(user.id);
+  user.admin = status === 'yes';
+  return { admin: user.admin, status, uid: user.id, email: user.email || '', provider: user.provider || '', mode: store.mode };
 });
 route('POST', '/api/admin/lock', ({ user }) => { try { localStorage.removeItem('bp_admin'); } catch {} user.admin = false; return { ok: true }; });
 route('GET', '/api/admin/users', async ({ user }) => {

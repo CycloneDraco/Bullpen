@@ -42,6 +42,11 @@ async function firebaseStore(cfg) {
     getProfile: async uid => data(await F.getDoc(d('profiles', uid))),
     // Admins are listed in admins/{uid}, which can only be created from the Firebase console.
     isAdmin: async uid => (await F.getDoc(d('admins', uid))).exists(),
+    // Why admin isn't active: 'yes', 'missing' (no admins/{uid} doc) or 'rules' (old rules block the check).
+    async adminStatus(uid) {
+      try { return (await F.getDoc(d('admins', uid))).exists() ? 'yes' : 'missing'; }
+      catch (e) { return e.code === 'permission-denied' ? 'rules' : 'error: ' + (e.code || e.message); }
+    },
     listProfiles: async () => (await F.getDocs(F.collection(db, 'profiles'))).docs.map(data),
     listAllGames: async () => (await F.getDocs(F.collection(db, 'games'))).docs.map(data),
     saveProfile: (uid, p) => F.setDoc(d('profiles', uid), p, { merge: true }),
@@ -134,6 +139,7 @@ function localStore() {
     getProfile: async uid => db.users[uid] ? clone({ id: uid, name: db.users[uid].name, picture: db.users[uid].picture, bio: db.users[uid].bio, color: db.users[uid].color, joined: db.users[uid].joined, handle: db.users[uid].handle, badges: db.users[uid].badges }) : null,
     async saveProfile() {},
     isAdmin: async () => true,
+    adminStatus: async () => 'yes',
     listProfiles: async () => Object.entries(db.users).map(([id, u]) => clone({ id, name: u.name, picture: u.picture, bio: u.bio, color: u.color, joined: u.joined, handle: u.handle, badges: u.badges })),
     listAllGames: async () => Object.values(db.games).map(clone),
     async deleteUserDocs(uid) { delete db.users[uid]; if (db.session === uid) db.session = null; persist(); },

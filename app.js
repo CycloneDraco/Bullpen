@@ -814,13 +814,25 @@ function viewSettings() {
     try {
       const r = await api('/api/admin/unlock', { method: 'POST', body: { password: e.target.pw.value } });
       if (r.admin) { state.me.admin = true; renderShell(); toast('Admin mode on.'); location.hash = '#/admin'; return; }
-      modal(`<h2>One more step</h2><p>The password is right, but Firebase doesn’t list this account as an admin yet, so it would block admin changes.</p>
-        <ol class="small" style="padding-left:18px;line-height:1.6"><li>Open the Firebase console → <b>Firestore Database</b> → <b>Data</b>.</li><li>Click <b>Start collection</b>, name it <code>admins</code>.</li><li>Set the <b>Document ID</b> to your user ID below, add any field (e.g. <code>role</code> = <code>admin</code>), and save.</li><li>Make sure the latest <code>firestore.rules</code> is published, then unlock again.</li></ol>
-        <div class="row" style="flex-wrap:nowrap"><input readonly value="${esc(r.uid)}" id="uidBox"><button class="btn secondary sm" id="copyUid">Copy</button></div>
-        <div class="actions"><button class="btn" data-x>Done</button></div>`, (el, close) => {
+      const steps = r.status === 'rules'
+        ? `<p><b>Firebase’s security rules are out of date</b>, so it won’t even check whether you’re an admin.</p>
+          <ol class="small" style="padding-left:18px;line-height:1.6"><li>Open <a href="https://github.com/CycloneDraco/Bullpen/blob/main/firestore.rules" target="_blank" rel="noopener">firestore.rules on GitHub</a> and copy everything.</li><li>Firebase console → <b>Firestore Database</b> → <b>Rules</b> tab → select all, paste, click <b>Publish</b>.</li><li>Wait about a minute, reload Bullpen, and unlock again.</li></ol>`
+        : r.status === 'missing'
+        ? `<p><b>Firebase has no admin entry for this account.</b> The document ID must be exactly the user ID below, not an auto-generated one.</p>
+          <ol class="small" style="padding-left:18px;line-height:1.6"><li>Firebase console → <b>Firestore Database</b> → <b>Data</b>.</li><li>Click <b>+ Start collection</b> (or open <code>admins</code> if it exists). Collection ID: <code>admins</code> (lowercase).</li><li>Document ID: paste the user ID below. Don’t click Auto-ID.</li><li>Add a field: <code>role</code>, type string, value <code>admin</code>. Click <b>Save</b>.</li><li>Reload Bullpen and unlock again.</li></ol>`
+        : `<p>Firebase returned an unexpected error: <code>${esc(r.status)}</code>. Send this to whoever set up Bullpen.</p>`;
+      modal(`<h2>Almost there</h2><p class="small muted" style="margin-top:0">The password is right. Signed in as <b>${esc(r.email || 'this account')}</b>${r.provider ? ` (${r.provider === 'email' ? 'email login' : 'Google'})` : ''}. Admin is tied to this exact account.</p>${steps}
+        <div class="field"><span class="muted small" style="font-weight:600">Your user ID</span><div class="row" style="flex-wrap:nowrap;margin-top:4px"><input readonly value="${esc(r.uid)}" id="uidBox"><button class="btn secondary sm" id="copyUid">Copy</button></div></div>
+        <div class="actions"><button class="btn secondary" data-x>Close</button><button class="btn" id="retryAdmin">I’ve done it, check again</button></div>`, (el, close) => {
         $('[data-x]', el).onclick = close;
         $('#copyUid', el).onclick = () => navigator.clipboard.writeText(r.uid).then(() => toast('User ID copied.'));
+        $('#retryAdmin', el).onclick = async () => {
+          const again = await api('/api/admin/unlock', { method: 'POST', body: { password: e.target.pw.value } }).catch(err => ({ status: err.message }));
+          if (again.admin) { close(); state.me.admin = true; renderShell(); toast('Admin mode on.'); location.hash = '#/admin'; }
+          else toast(again.status === 'rules' ? 'Still blocked: the rules aren’t published yet.' : again.status === 'missing' ? 'Still no admins entry for this user ID.' : String(again.status), true);
+        };
       });
+
     } catch (err) { toast(err.message, true); }
   };
   $('#adminLock')?.addEventListener('click', async () => { await api('/api/admin/lock', { method: 'POST' }); state.me.admin = false; renderShell(); toast('Admin mode off.'); route(); });
