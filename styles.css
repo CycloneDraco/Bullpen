@@ -174,3 +174,6 @@ tbody tr.link { cursor: pointer; transition: background .15s; } tbody tr.link:ho
 @media (prefers-contrast: more) { :root { --line: rgba(0,0,0,.3); } .card { border: 1px solid var(--ink-3); } }
 .tv { height: 420px; margin-top: 8px; border-radius: 12px; overflow: hidden; }
 @media (max-width: 760px) { .tv { height: 320px; } }
+.chain tr.itm td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.chain tr.picked td { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.chain tr.spot td { text-align: center; font-size: .75rem; font-weight: 700; color: var(--accent); padding: 4px; border-bottom: 2px solid var(--accent); }

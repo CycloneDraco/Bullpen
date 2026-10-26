@@ -208,7 +208,7 @@ async function viewPortfolio(q) {
   app.innerHTML = `<div class="view">
     <div class="page-head"><div><div class="muted small">${esc(pf.game.settings.name)}</div><h1>${own ? 'Portfolio' : esc(pf.owner) + '’s portfolio'}</h1></div>
       ${own ? `<div class="row">${pf.game.settings.allowReset ? '<button class="btn secondary sm" id="reset">Reset portfolio</button>' : ''}<a class="btn" href="#/trade">Trade</a></div>` : ''}</div>
-    <div class="grid g4">${[['Account value', money(pf.equity)], ['Today', `<span class="${cls(pf.dayChange)}">${signed(pf.dayChange)}</span>`], ['Total return', `<span class="${cls(pf.totalGain)}">${signed(pf.totalGain)} <span class="small">${pct(pf.totalGainPct)}</span></span>`], ['Buying power', money(pf.buyingPower)], ['Cash', money(pf.cash)], ['Long value', money(pf.longValue)], ['Short value', money(pf.shortValue)], ['Positions', pf.holdings.length]].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
+    <div class="grid g4">${[['Account value', money(pf.equity)], ['Today', `<span class="${cls(pf.dayChange)}">${signed(pf.dayChange)}</span>`], ['Total return', `<span class="${cls(pf.totalGain)}">${signed(pf.totalGain)} <span class="small">${pct(pf.totalGainPct)}</span></span>`], ['Buying power', money(pf.buyingPower)], ['Cash', money(pf.cash)], ['Long value', money(pf.longValue)], ['Short value', money(pf.shortValue)], ['Positions', pf.holdings.length + (pf.options || []).length]].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
     <div class="card" style="margin-top:var(--gap)">
       <div class="card-head"><div class="seg">${['holdings', ...(own ? ['orders'] : []), 'history', 'performance'].map(t => `<button data-t="${t}" class="${t === tab ? 'on' : ''}">${{ holdings: 'Holdings', orders: `Open orders (${pf.orders.length})`, history: 'Trade history', performance: 'Performance' }[t]}</button>`).join('')}</div></div>
       <div id="pane"></div></div></div>`;
@@ -222,16 +222,19 @@ async function viewPortfolio(q) {
     const longs = pf.holdings.filter(h => h.qty > 0), shorts = pf.holdings.filter(h => h.qty < 0);
     const tbl = (rows, short) => `<div class="table-wrap"><table><thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Day</th><th class="r">${short ? 'Short' : 'Avg'} price</th><th class="r">Value</th><th class="r">Gain / loss</th>${own ? '<th></th>' : ''}</tr></thead><tbody>
       ${rows.map(h => `<tr class="link" data-go="#/research?symbol=${encodeURIComponent(h.symbol)}"><td><div class="sym">${esc(h.symbol)}</div><div class="sym-name">${esc(h.name)}</div></td><td class="r">${Math.abs(h.qty)}</td><td class="r">${money(h.price, { full: true })}</td><td class="r ${cls(h.dayChangePct)}">${pct(h.dayChangePct)}</td><td class="r">${money(h.avg, { full: true })}</td><td class="r">${money(Math.abs(h.value))}</td><td class="r ${cls(h.gain)}">${signed(h.gain)}<div class="small">${pct(h.gainPct)}</div></td>${own ? `<td class="r"><a class="btn sm secondary" href="#/trade?symbol=${encodeURIComponent(h.symbol)}&action=${short ? 'cover' : 'sell'}&qty=${Math.abs(h.qty)}">${short ? 'Cover' : 'Sell'}</a></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
-    pane.innerHTML = (longs.length ? `<h3 style="margin:6px 0">Stocks &amp; ETFs</h3>${tbl(longs)}` : '') + (shorts.length ? `<h3 style="margin:22px 0 6px">Short positions</h3>${tbl(shorts, true)}` : '') + (!pf.holdings.length ? '<div class="empty">No positions yet.</div>' : '');
+    const opts = pf.options || [];
+    const optTbl = opts.length ? `<h3 style="margin:22px 0 6px">Options</h3><div class="table-wrap"><table><thead><tr><th>Contract</th><th class="r">Contracts</th><th class="r">Underlying</th><th class="r">Mark</th><th class="r">Avg price</th><th class="r">Delta</th><th class="r">Value</th><th class="r">Gain / loss</th>${own ? '<th></th>' : ''}</tr></thead><tbody>
+      ${opts.map(h => `<tr><td><div class="sym">${esc(h.name)}</div><div class="sym-name">${h.qty > 0 ? 'Long' : 'Written'} · expires ${h.exp}</div></td><td class="r">${h.qty}</td><td class="r">${money(h.underlying, { full: true })}</td><td class="r">${money(h.price, { full: true })}</td><td class="r">${money(h.avg, { full: true })}</td><td class="r">${h.delta == null ? '—' : (h.delta * Math.sign(h.qty)).toFixed(2)}</td><td class="r">${signed(h.value)}</td><td class="r ${cls(h.gain)}">${signed(h.gain)}<div class="small">${pct(h.gainPct)}</div></td>${own ? `<td class="r"><a class="btn sm secondary" href="#/trade?asset=option&key=${encodeURIComponent(h.key)}&action=${h.qty > 0 ? 'stc' : 'btc'}&qty=${Math.abs(h.qty)}">Close</a></td>` : ''}</tr>`).join('')}</tbody></table></div>` : '';
+    pane.innerHTML = (longs.length ? `<h3 style="margin:6px 0">Stocks &amp; ETFs</h3>${tbl(longs)}` : '') + (shorts.length ? `<h3 style="margin:22px 0 6px">Short positions</h3>${tbl(shorts, true)}` : '') + optTbl + (!pf.holdings.length && !opts.length ? '<div class="empty">No positions yet.</div>' : '');
   }
   if (tab === 'orders') {
     pane.innerHTML = pf.orders.length ? `${pf.marketOpen ? '' : '<p class="muted small">The market is closed. Market orders will fill at the next open.</p>'}<div class="table-wrap"><table><thead><tr><th>Placed</th><th>Symbol</th><th>Action</th><th class="r">Qty</th><th>Type</th><th>Duration</th><th></th></tr></thead><tbody>
-      ${pf.orders.map(o => `<tr><td>${when(o.created)}</td><td class="sym">${esc(o.symbol)}</td><td>${o.action}</td><td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td>${o.duration === 'gtc' ? 'Good ’til cancelled' : 'Day'}</td><td class="r"><button class="btn sm danger" data-cancel="${o.id}">Cancel</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No open orders.</div>';
+      ${pf.orders.map(o => `<tr><td>${when(o.created)}</td>${tradeCells(o)}<td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td>${o.duration === 'gtc' ? 'Good ’til cancelled' : 'Day'}</td><td class="r"><button class="btn sm danger" data-cancel="${o.id}">Cancel</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No open orders.</div>';
     $$('[data-cancel]', pane).forEach(b => b.onclick = async () => { await api(`/api/games/${g.id}/orders/${b.dataset.cancel}`, { method: 'DELETE' }); toast('Order cancelled.'); route(); });
   }
   if (tab === 'history') {
     pane.innerHTML = pf.history.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Symbol</th><th>Action</th><th class="r">Qty</th><th>Type</th><th class="r">Price</th><th class="r">Fee</th><th>Status</th></tr></thead><tbody>
-      ${pf.history.map(o => `<tr><td>${when(o.filledAt || o.created)}</td><td class="sym">${esc(o.symbol)}</td><td>${o.action}</td><td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td class="r">${o.fillPrice ? money(o.fillPrice, { full: true }) : '—'}</td><td class="r">${o.fee ? money(o.fee) : '—'}</td><td><span class="badge ${o.status === 'filled' ? 'live' : ''}" title="${esc(o.reason || '')}">${o.status}</span></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No trades yet.</div>';
+      ${pf.history.map(o => `<tr><td>${when(o.filledAt || o.created)}</td>${tradeCells(o)}<td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td class="r">${o.fillPrice ? money(o.fillPrice, { full: true }) : '—'}</td><td class="r">${o.fee ? money(o.fee) : '—'}</td><td><span class="badge ${o.status === 'filled' ? 'live' : ''}" title="${esc(o.reason || '')}">${o.status}</span></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No trades yet.</div>';
   }
   if (tab === 'performance') {
     pane.innerHTML = '<div id="pchart"></div><div class="chart-tip" id="ptip"></div>';
@@ -240,15 +243,19 @@ async function viewPortfolio(q) {
     lineChart($('#pchart'), snaps, { tip: $('#ptip'), baseline: g.settings.startingCash, tall: true });
   }
 }
+const ACTION_LABEL = { buy: 'Buy', sell: 'Sell', short: 'Short', cover: 'Cover', bto: 'Buy to open', stc: 'Sell to close', sto: 'Sell to open', btc: 'Buy to close' };
+const tradeCells = o => `<td class="sym">${esc(o.asset === 'option' ? o.desc : o.symbol)}</td><td>${ACTION_LABEL[o.action] || o.action}</td>`;
 const orderDesc = o => ({ market: 'Market', limit: `Limit ${money(o.limitPrice, { full: true })}`, stop: `Stop ${money(o.stopPrice, { full: true })}`, trailing: `Trailing ${o.trailUnit === '$' ? money(o.trail) : o.trail + '%'}` }[o.type]);
 
 // ---------- trade ----------
+const assetSwitch = (asset, s) => s.allowOptions ? `<div class="seg"><button type="button" class="${asset === 'stock' ? 'on' : ''}" onclick="location.hash='#/trade'">Stocks &amp; ETFs</button><button type="button" class="${asset === 'option' ? 'on' : ''}" onclick="location.hash='#/trade?asset=option'">Options</button></div>` : '';
 async function viewTrade(q) {
+  if (q.get('asset') === 'option') return viewTradeOptions(q);
   const g = activeGame(), s = g.settings;
   const f = { symbol: (q.get('symbol') || '').toUpperCase(), action: q.get('action') || 'buy', qty: q.get('qty') || '', type: 'market', duration: 'day', limitPrice: '', stopPrice: '', trail: '', trailUnit: '%' };
   const actions = ['buy', 'sell', ...(s.allowShort ? ['short', 'cover'] : [])];
   const types = ['market', ...(s.allowLimit ? ['limit'] : []), ...(s.allowStop ? ['stop'] : []), ...(s.allowTrailing ? ['trailing'] : [])];
-  app.innerHTML = `<div class="view"><div class="page-head"><div><div class="muted small">${esc(s.name)}</div><h1>Trade</h1></div></div>
+  app.innerHTML = `<div class="view"><div class="page-head"><div><div class="muted small">${esc(s.name)}</div><h1>Trade</h1></div>${assetSwitch('stock', s)}</div>
     <div class="grid g2"><form class="card stack" id="tf" autocomplete="off">
       <label class="field"><span>Symbol</span><div><input name="symbol" placeholder="Search a company or ticker" value="${esc(f.symbol)}"></div></label>
       <div id="quote"></div>
@@ -314,9 +321,111 @@ async function viewTrade(q) {
   });
   setAct(actions.includes(f.action) ? f.action : 'buy');
   pf = await api(`/api/games/${g.id}/portfolio`);
-  $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l}</div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
-  $('#rules').innerHTML = `<h3 style="color:var(--ink);margin-bottom:6px">Game rules</h3>Commission: ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) + ' per trade' : s.commission + '% of trade') : 'none'}<br>Short selling: ${s.allowShort ? `on (min ${money(s.minShortPrice)})` : 'off'}<br>Margin: ${s.allowMargin ? `on (${s.marginInterest}% interest)` : 'off'}<br>${s.minStockPrice ? `Min. stock price: ${money(s.minStockPrice)}<br>` : ''}${s.maxPositionPct < 100 ? `Max position: ${s.maxPositionPct}% of portfolio<br>` : ''}${s.dailyTradeLimit ? `Daily trade limit: ${s.dailyTradeLimit}<br>` : ''}ETFs: ${s.allowEtf ? 'allowed' : 'not allowed'}`;
+  $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l}</div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length + (pf.options || []).length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
+  $('#rules').innerHTML = `<h3 style="color:var(--ink);margin-bottom:6px">Game rules</h3>Commission: ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) + ' per trade' : s.commission + '% of trade') : 'none'}<br>Short selling: ${s.allowShort ? `on (min ${money(s.minShortPrice)})` : 'off'}<br>Margin: ${s.allowMargin ? `on (${s.marginInterest}% interest)` : 'off'}<br>${s.minStockPrice ? `Min. stock price: ${money(s.minStockPrice)}<br>` : ''}${s.maxPositionPct < 100 ? `Max position: ${s.maxPositionPct}% of portfolio<br>` : ''}${s.dailyTradeLimit ? `Daily trade limit: ${s.dailyTradeLimit}<br>` : ''}ETFs: ${s.allowEtf ? 'allowed' : 'not allowed'}<br>Options: ${s.allowOptions ? (s.allowOptionWriting ? 'buy and write' : 'buy only') : 'off'}`;
   if (f.symbol) loadQuote(f.symbol); else form.symbol.focus();
+}
+
+// ---------- options trading ----------
+async function viewTradeOptions(q) {
+  const g = activeGame(), s = g.settings;
+  const st = { sym: (q.get('symbol') || '').toUpperCase(), exp: q.get('exp') || '', side: 'C', key: q.get('key') || '', action: q.get('action') || 'bto', chain: null, contract: null };
+  if (st.key) { const [sy, ex, ty] = st.key.split('_'); Object.assign(st, { sym: sy, exp: ex, side: ty }); }
+  const head = `<div class="page-head"><div><div class="muted small">${esc(s.name)}</div><h1>Trade options</h1></div>${assetSwitch('option', s)}</div>`;
+  if (!s.allowOptions) { app.innerHTML = `<div class="view">${head}<div class="card empty">Options trading is turned off in this game.</div></div>`; return; }
+  const actions = [['bto', 'Buy to open'], ['stc', 'Sell to close'], ...(s.allowOptionWriting ? [['sto', 'Sell to open'], ['btc', 'Buy to close']] : [])];
+  app.innerHTML = `<div class="view">${head}<div class="grid g2">
+    <div class="card"><div class="row"><div style="flex:1;min-width:180px"><div><input id="osym" placeholder="Underlying, e.g. AAPL" value="${esc(st.sym)}" aria-label="Underlying symbol" autocomplete="off"></div></div>
+      <select id="oexp" style="width:auto" aria-label="Expiration"></select>
+      <div class="seg" id="oside"><button type="button" data-v="C">Calls</button><button type="button" data-v="P">Puts</button></div></div>
+      <div id="uq" style="margin-top:12px"></div><div id="chain" style="margin-top:8px"><div class="empty">Choose a stock or ETF to see its option chain.</div></div>
+      <p class="hint">Prices are modelled with Black-Scholes from the live stock price and its real 3-month volatility. One contract = 100 shares. Expired contracts settle in cash at intrinsic value.</p></div>
+    <form class="card stack" id="of" autocomplete="off">
+      <div id="sel" class="muted">Pick a contract from the chain.</div>
+      <div class="seg full" id="oact">${actions.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('')}</div>
+      <div class="form-grid">
+        <label class="field"><span>Contracts</span><input name="qty" type="number" min="1" step="1" inputmode="numeric" value="${esc(q.get('qty') || '')}" placeholder="0"><div class="hint" id="omax"></div></label>
+        <label class="field"><span>Order type</span><select name="type"><option value="market">Market</option>${s.allowLimit ? '<option value="limit">Limit</option>' : ''}</select></label>
+        <label class="field" data-for="limit" hidden><span>Limit price (per share)</span><input name="limitPrice" type="number" step="0.01" min="0"></label>
+        <label class="field"><span>Duration</span><select name="duration"><option value="day">Day only</option><option value="gtc">Good ’til cancelled</option></select></label>
+      </div>
+      <div id="oest" class="muted small"></div>
+      <button class="btn block" id="ogo">Preview order</button>
+    </form></div></div>`;
+  const form = $('#of');
+  let pf = null;
+  const setAct = a => { st.action = actions.some(x => x[0] === a) ? a : 'bto'; $$('#oact button').forEach(b => b.classList.toggle('on', b.dataset.v === st.action)); estimate(); };
+  $$('#oact button').forEach(b => b.onclick = () => setAct(b.dataset.v));
+  form.type.onchange = () => { $('[data-for="limit"]').hidden = form.type.value !== 'limit'; estimate(); };
+  form.addEventListener('input', estimate);
+  function estimate() {
+    const c = st.contract; if (!c || !pf) return;
+    const buy = st.action === 'bto' || st.action === 'btc';
+    const px = form.type.value === 'limit' && +form.limitPrice.value ? +form.limitPrice.value : buy ? c.ask : c.bid;
+    const qty = +form.qty.value || 0, held = (pf.options || []).find(h => h.key === c.key)?.qty || 0;
+    const max = st.action === 'stc' ? Math.max(0, held) : st.action === 'btc' ? Math.max(0, -held) : st.action === 'sto' ? Math.floor(pf.buyingPower / (c.underlying * 20)) : Math.floor(pf.buyingPower / (px * 100 || 1));
+    $('#omax').innerHTML = `Max: <a href="#" id="omaxset">${max.toLocaleString()}</a>`;
+    $('#omaxset').onclick = e => { e.preventDefault(); form.qty.value = max; estimate(); };
+    $('#oest').innerHTML = qty ? `Estimated ${buy ? 'cost' : 'credit'}: <b class="num" style="color:var(--ink)">${money(qty * 100 * px, { full: true })}</b> (${qty} × 100 × ${money(px, { full: true })})${s.optionCommission ? ` + ${money(s.optionCommission * qty)} contract fees` : ''}` : '';
+  }
+  function select(c) {
+    st.contract = c; st.key = c.key;
+    $('#sel').innerHTML = `<div class="sym" style="font-size:1.1rem">${esc(c.desc)}</div><div class="small muted">Bid ${money(c.bid, { full: true })} · Ask ${money(c.ask, { full: true })} · Delta ${c.delta.toFixed(2)} · IV ${(c.iv * 100).toFixed(1)}%</div>`;
+    $$('#chain tr[data-k]').forEach(r => r.classList.toggle('picked', r.dataset.k === c.key));
+    estimate();
+  }
+  function drawChain() {
+    const ch = st.chain; if (!ch) return;
+    $$('#oside button').forEach(b => b.classList.toggle('on', b.dataset.v === st.side));
+    const rows = st.side === 'C' ? ch.calls : ch.puts, S = ch.quote.price;
+    let marked = false;
+    $('#chain').innerHTML = `<div class="table-wrap"><table class="chain"><thead><tr><th>Strike</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Mid</th><th class="r">Delta</th><th class="r">IV</th></tr></thead><tbody>
+      ${rows.map(c => { const line = !marked && c.strike >= S ? (marked = true, `<tr class="spot"><td colspan="6">${esc(ch.quote.symbol)} ${money(S, { full: true })}</td></tr>`) : '';
+        return `${line}<tr class="link ${c.itm ? 'itm' : ''}" data-k="${esc(c.key)}"><td><b>${money(c.strike)}</b></td><td class="r">${money(c.bid, { full: true })}</td><td class="r">${money(c.ask, { full: true })}</td><td class="r">${money(c.mid, { full: true })}</td><td class="r">${c.delta.toFixed(2)}</td><td class="r">${(c.iv * 100).toFixed(1)}%</td></tr>`; }).join('')}</tbody></table></div>`;
+    $$('#chain tr[data-k]').forEach(r => r.onclick = () => select(rows.find(c => c.key === r.dataset.k)));
+    const pre = rows.find(c => c.key === st.key); if (pre) select(pre);
+  }
+  async function loadChain() {
+    if (!st.sym) return;
+    $('#chain').innerHTML = '<div class="skeleton" style="height:200px"></div>';
+    try { st.chain = await api(`/api/options/${encodeURIComponent(st.sym)}?exp=${st.exp}`); }
+    catch (e) { $('#chain').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    st.exp = st.chain.exp; $('#osym').value = st.chain.quote.symbol;
+    $('#oexp').innerHTML = st.chain.expirations.map(x => `<option value="${x}" ${x === st.exp ? 'selected' : ''}>${new Date(x + 'T12:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })} (${Math.max(0, Math.round((Date.parse(x) - Date.now()) / 864e5))}d)</option>`).join('');
+    const u = st.chain.quote;
+    $('#uq').innerHTML = `<div class="row"><b>${esc(u.name)}</b><span class="spacer"></span><b class="num">${money(u.price, { full: true })}</b><span class="small ${cls(u.change)}">${pct(u.changePct)}</span><span class="badge">Volatility ${(st.chain.vol * 100).toFixed(1)}%</span></div>`;
+    drawChain();
+  }
+  symbolSearch($('#osym'), sym => { st.sym = sym; st.exp = ''; st.key = ''; st.contract = null; loadChain(); });
+  $('#oexp').onchange = e => { st.exp = e.target.value; loadChain(); };
+  $$('#oside button').forEach(b => b.onclick = () => { st.side = b.dataset.v; drawChain(); });
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const c = st.contract; if (!c) return toast('Pick a contract from the chain first.', true);
+    const o = { asset: 'option', key: c.key, action: st.action, qty: +form.qty.value, type: form.type.value, limitPrice: +form.limitPrice.value, duration: form.duration.value };
+    if (!(o.qty > 0)) return toast('Enter how many contracts.', true);
+    const buy = o.action === 'bto' || o.action === 'btc', px = o.type === 'limit' ? o.limitPrice : buy ? c.ask : c.bid;
+    const submit = async close => {
+      try { const r = await api(`/api/games/${g.id}/orders`, { method: 'POST', body: o }); close?.();
+        toast(r.filled ? `${ACTION_LABEL[o.action]} ${o.qty} × ${c.desc} filled at ${money(r.order.fillPrice, { full: true })}` : r.marketOpen ? 'Order placed. It fills when its price is reached.' : 'Order placed. It fills when the market opens.');
+        location.hash = r.filled ? '#/portfolio' : '#/portfolio?tab=orders';
+      } catch (err) { toast(err.message, true); }
+    };
+    if (prefs().confirmTrades === false) return submit();
+    modal(`<h2>Review order</h2><div class="rows">
+      <div><span class="muted">Action</span><b>${ACTION_LABEL[o.action]}</b></div>
+      <div><span class="muted">Contract</span><span>${esc(c.desc)}</span></div>
+      <div><span class="muted">Contracts</span><span>${o.qty} (${o.qty * 100} shares)</span></div>
+      <div><span class="muted">Order type</span><span>${o.type === 'limit' ? `Limit ${money(o.limitPrice, { full: true })}` : 'Market'}</span></div>
+      <div><span class="muted">Estimated ${buy ? 'cost' : 'credit'}</span><b>${money(o.qty * 100 * px, { full: true })}</b></div></div>
+      ${pf && !pf.marketOpen ? '<p class="small muted">The market is closed, so this order will be queued.</p>' : ''}
+      <div class="actions"><button class="btn secondary" data-x>Edit</button><button class="btn ${buy ? '' : 'down'}" data-ok>Place order</button></div>`, (el, close) => {
+      $('[data-x]', el).onclick = close; $('[data-ok]', el).onclick = () => submit(close);
+    });
+  });
+  setAct(st.action);
+  pf = await api(`/api/games/${g.id}/portfolio`);
+  if (st.sym) loadChain(); else $('#osym').focus();
 }
 
 // ---------- research ----------
@@ -337,7 +446,7 @@ async function viewResearch(q) {
       <div id="chart" class="tv"></div></div>
     <div class="stack"><div class="card"><h3 style="margin-bottom:8px">Key stats</h3><table><tbody>
       ${[['Previous close', money(qt.prevClose, { full: true })], ['Open', money(qt.open, { full: true })], ['Day range', `${money(qt.low, { full: true })} – ${money(qt.high, { full: true })}`], ['Type', qt.type === 'ETF' ? 'Fund' : 'Stock'], ['Last update', when(qt.time)]].map(([k, v]) => `<tr><td class="muted">${k}</td><td class="r">${v}</td></tr>`).join('')}</tbody></table></div>
-      <div class="card row"><a class="btn up" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=buy">Buy</a><a class="btn down" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=sell">Sell</a>${activeGame()?.settings.allowShort ? `<a class="btn secondary" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=short">Short</a>` : ''}</div>
+      <div class="card row"><a class="btn up" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=buy">Buy</a><a class="btn down" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=sell">Sell</a>${activeGame()?.settings.allowShort ? `<a class="btn secondary" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=short">Short</a>` : ''}${activeGame()?.settings.allowOptions ? `<a class="btn secondary" style="flex:1" href="#/trade?asset=option&symbol=${encodeURIComponent(sym)}">Options</a>` : ''}</div>
     </div></div>`;
   $('#watch').onclick = async () => {
     const list = watching ? wl.symbols.filter(s => s !== sym) : [...wl.symbols, sym];
@@ -399,6 +508,11 @@ const SETTING_GROUPS = [
     ['maxPositionPct', 'Max single position (% of portfolio)', 'number', null, '100 = no diversification rule.'],
     ['dailyTradeLimit', 'Daily trade limit', 'number', null, '0 = unlimited.'],
   ]],
+  ['Options', [
+    ['allowOptions', 'Allow options trading', 'bool', null, 'Calls and puts on any US stock or ETF.'],
+    ['allowOptionWriting', 'Allow writing options (sell to open)', 'bool', null, 'Uncovered contracts reserve 20% of the underlying as margin.'],
+    ['optionCommission', 'Fee per contract ($)', 'number', null, 'Charged on top of the regular commission.'],
+  ]],
   ['Players', [
     ['allowLateEntry', 'Allow late entry', 'bool', null, 'Players can join after the start date.'],
     ['allowReset', 'Allow portfolio resets', 'bool'],
@@ -412,7 +526,7 @@ function settingsForm(s, sandbox) {
       : `<label class="field" style="margin-bottom:12px"><span>${label}</span>${type === 'select' ? `<select name="${k}">${opts.map(([v, t]) => `<option value="${v}" ${s[k] === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` : type === 'textarea' ? `<textarea name="${k}" rows="2">${esc(s[k])}</textarea>` : `<input name="${k}" type="${type}" value="${esc(s[k])}" ${type === 'number' ? 'step="any" min="0"' : ''}>`}${hint ? `<div class="hint">${hint}</div>` : ''}</label>`).join('')}</div>`).join('');
 }
 const readForm = form => Object.fromEntries([...form.elements].filter(e => e.name).map(e => [e.name, e.type === 'checkbox' ? e.checked : e.type === 'number' ? +e.value : e.value]));
-const DEFAULTS = { name: '', description: '', privacy: 'public', password: '', startDate: new Date().toLocaleDateString('en-CA'), endDate: '', startingCash: 100000, commissionType: 'flat', commission: 0, cashInterest: 0, allowMargin: false, marginInterest: 8, allowShort: true, minShortPrice: 5, allowLimit: true, allowStop: true, allowTrailing: true, allowEtf: true, allowMutualFunds: false, minStockPrice: 0, maxPositionPct: 100, dailyTradeLimit: 0, allowLateEntry: true, allowReset: true, showPortfolios: true };
+const DEFAULTS = { name: '', description: '', privacy: 'public', password: '', startDate: new Date().toLocaleDateString('en-CA'), endDate: '', startingCash: 100000, commissionType: 'flat', commission: 0, cashInterest: 0, allowMargin: false, marginInterest: 8, allowShort: true, minShortPrice: 5, allowLimit: true, allowStop: true, allowTrailing: true, allowEtf: true, allowMutualFunds: false, minStockPrice: 0, maxPositionPct: 100, dailyTradeLimit: 0, allowLateEntry: true, allowReset: true, showPortfolios: true, allowOptions: true, allowOptionWriting: false, optionCommission: 0 };
 
 async function viewGames() {
   await loadGames();

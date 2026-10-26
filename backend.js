@@ -57,6 +57,85 @@ async function search(q) {
   });
 }
 
+// ---------- options (Black-Scholes on the live price + real 3-month volatility) ----------
+// Finnhub's free plan has no option chains, so contracts are priced the way the model
+// says they should trade: live underlying price, the stock's realised volatility, its dividend yield.
+const RATE = 0.04;
+let vols = {}; try { vols = JSON.parse(localStorage.getItem('bp_vol')) || {}; } catch {}
+async function getVol(sym) {
+  const c = vols[sym];
+  if (c && c.day === nyDate()) return c;
+  try {
+    const m = (await fh('/stock/metric?metric=all&symbol=' + encodeURIComponent(sym))).metric || {};
+    vols[sym] = { vol: Math.min(2, Math.max(0.08, (m['3MonthADReturnStd'] || 30) / 100)), div: (m.dividendYieldIndicatedAnnual || 0) / 100, day: nyDate() };
+    try { localStorage.setItem('bp_vol', JSON.stringify(vols)); } catch {}
+    return vols[sym];
+  } catch { return c || { vol: 0.3, div: 0 }; }
+}
+const ncdf = x => {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+};
+function blackScholes(type, S, K, T, v, q) {
+  if (T <= 0) return { price: Math.max(0, type === 'C' ? S - K : K - S), delta: type === 'C' ? +(S > K) : -(S < K) };
+  const d1 = (Math.log(S / K) + (RATE - q + v * v / 2) * T) / (v * Math.sqrt(T)), d2 = d1 - v * Math.sqrt(T);
+  return type === 'C'
+    ? { price: S * Math.exp(-q * T) * ncdf(d1) - K * Math.exp(-RATE * T) * ncdf(d2), delta: Math.exp(-q * T) * ncdf(d1) }
+    : { price: K * Math.exp(-RATE * T) * ncdf(-d2) - S * Math.exp(-q * T) * ncdf(-d1), delta: -Math.exp(-q * T) * ncdf(-d1) };
+}
+// Contract keys look like AAPL_2026-11-20_C_350.
+export function parseKey(key) {
+  const [symbol, exp, type, strike] = String(key).split('_');
+  if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(exp) || !['C', 'P'].includes(type) || !(+strike > 0)) throw httpError(400, 'Unknown option contract.');
+  return { symbol: symbol.toUpperCase(), exp, type, strike: +strike };
+}
+const optionKey = o => `${o.symbol}_${o.exp}_${o.type}_${o.strike}`;
+export const optionLabel = o => `${o.symbol} ${new Date(o.exp + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' })} $${o.strike} ${o.type === 'C' ? 'Call' : 'Put'}`;
+const expiryTime = exp => Date.parse(exp + 'T20:00:00Z'); // 4pm New York (EDT)
+function expirations() {
+  const today = nyDate(), base = new Date(today + 'T12:00:00Z'), out = new Set();
+  for (let i = 1; i < 60 && out.size < 6; i++) { const d = new Date(base.getTime() + i * 864e5); if (d.getUTCDay() === 5) out.add(d.toISOString().slice(0, 10)); }
+  for (let m = 0; m < 12; m++) {
+    const first = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + m, 1, 12));
+    const third = new Date(first.getTime() + (((5 - first.getUTCDay() + 7) % 7) + 14) * 864e5).toISOString().slice(0, 10);
+    if (third > today) out.add(third);
+  }
+  return [...out].sort();
+}
+function strikeList(S) {
+  const step = S < 5 ? 0.5 : S < 25 ? 1 : S < 100 ? 2.5 : S < 250 ? 5 : S < 1000 ? 10 : 25;
+  const mid = Math.round(S / step) * step;
+  return Array.from({ length: 25 }, (_, i) => +(mid + (i - 12) * step).toFixed(2)).filter(k => k > 0);
+}
+const r2 = n => Math.round(n * 100) / 100;
+function priceOption(o, S, vol, div) {
+  const T = Math.max(0, (expiryTime(o.exp) - Date.now()) / (365 * 864e5));
+  const m = Math.log(o.strike / S), iv = vol * (1 + 1.5 * m * m); // gentle volatility smile
+  const { price, delta } = blackScholes(o.type, S, o.strike, T, iv, div);
+  const mid = Math.max(0.01, r2(price)), spread = Math.max(0.02, mid * 0.04);
+  return {
+    ...o, key: optionKey(o), desc: optionLabel(o), underlying: S, iv, delta, mid, expired: T <= 0,
+    bid: T <= 0 ? mid : Math.max(0, r2(mid - spread / 2)), ask: T <= 0 ? mid : r2(mid + spread / 2),
+    itm: o.type === 'C' ? S > o.strike : S < o.strike,
+  };
+}
+// Live marks for everything a set of players holds or has orders on.
+async function marks(players) {
+  const syms = new Set(), keys = new Set();
+  for (const p of players) {
+    Object.keys(p.positions || {}).forEach(s => syms.add(s));
+    Object.keys(p.options || {}).forEach(k => { keys.add(k); syms.add(parseKey(k).symbol); });
+  }
+  const quotes = await getQuotes([...syms]), optq = {};
+  for (const k of keys) {
+    const o = parseKey(k), u = quotes[o.symbol]; if (!u) continue;
+    const { vol, div } = await getVol(o.symbol);
+    optq[k] = priceOption(o, u.price, vol, div);
+  }
+  return { quotes, optq };
+}
+
 // US market hours (ignores exchange holidays)
 export function marketOpen(d = new Date()) {
   const ny = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -75,6 +154,7 @@ const DEFAULT_SETTINGS = {
   allowLimit: true, allowStop: true, allowTrailing: true,
   minStockPrice: 0, minShortPrice: 5, maxPositionPct: 100, dailyTradeLimit: 0,
   allowEtf: true, allowMutualFunds: false,
+  allowOptions: true, allowOptionWriting: false, optionCommission: 0,
 };
 function cleanSettings(input, base = DEFAULT_SETTINGS) {
   const s = { ...DEFAULT_SETTINGS, ...base };
@@ -88,7 +168,7 @@ function cleanSettings(input, base = DEFAULT_SETTINGS) {
   s.startingCash = Math.min(Math.max(s.startingCash, 1000), 100000000);
   return s;
 }
-const newPlayer = (g, user) => ({ userId: user.id, name: user.name, picture: user.picture || '', cash: g.settings.startingCash, positions: {}, orders: [], history: [], snapshots: {}, joined: Date.now(), tradesByDay: {} });
+const newPlayer = (g, user) => ({ userId: user.id, name: user.name, picture: user.picture || '', cash: g.settings.startingCash, positions: {}, options: {}, orders: [], history: [], snapshots: {}, joined: Date.now(), tradesByDay: {} });
 function gameActive(g) {
   const today = nyDate();
   return today >= g.settings.startDate && (!g.settings.endDate || today <= g.settings.endDate);
@@ -102,7 +182,7 @@ async function ensureDefaultGame(user) {
 }
 
 // ---------- portfolio math & order engine ----------
-function valuation(p, quotes) {
+function valuation(p, quotes, optq = {}) {
   let longValue = 0, shortValue = 0;
   const holdings = Object.entries(p.positions).map(([sym, pos]) => {
     const q = quotes[sym]; const price = q?.price ?? pos.avg;
@@ -111,11 +191,24 @@ function valuation(p, quotes) {
     const gain = pos.qty > 0 ? (price - pos.avg) * pos.qty : (pos.avg - price) * -pos.qty;
     return { symbol: sym, name: q?.name || sym, qty: pos.qty, avg: pos.avg, price, value, gain, gainPct: (gain / Math.abs(pos.avg * pos.qty)) * 100, dayChange: (q?.change || 0) * pos.qty, dayChangePct: q?.changePct || 0 };
   });
-  return { holdings, longValue, shortValue, equity: p.cash + longValue - shortValue };
+  let optCollateral = 0;
+  const options = Object.entries(p.options || {}).map(([key, pos]) => {
+    const o = parseKey(key), mark = optq[key]?.mid ?? pos.avg, value = pos.qty * 100 * mark;
+    if (pos.qty > 0) longValue += value;
+    else {
+      shortValue += -value;
+      // Written contracts tie up margin: 20% of the underlying, unless calls are covered by shares.
+      const covered = o.type === 'C' ? Math.floor(Math.max(0, p.positions[o.symbol]?.qty || 0) / 100) : 0;
+      optCollateral += Math.max(0, -pos.qty - covered) * 100 * (quotes[o.symbol]?.price ?? o.strike) * 0.2;
+    }
+    const gain = (mark - pos.avg) * pos.qty * 100;
+    return { key, symbol: o.symbol, name: optionLabel(o), type: o.type, strike: o.strike, exp: o.exp, qty: pos.qty, avg: pos.avg, price: mark, value, gain, gainPct: pos.avg ? (gain / Math.abs(pos.avg * pos.qty * 100)) * 100 : 0, delta: optq[key]?.delta, underlying: quotes[o.symbol]?.price };
+  });
+  return { holdings, options, longValue, shortValue, optCollateral, equity: p.cash + longValue - shortValue };
 }
 function buyingPower(p, g, v) {
   // Short proceeds sit in cash but are held as collateral; margin lends up to equity again.
-  return Math.max(0, p.cash - v.shortValue + (g.settings.allowMargin ? v.equity : 0));
+  return Math.max(0, p.cash - v.shortValue - (v.optCollateral || 0) + (g.settings.allowMargin ? v.equity : 0));
 }
 const commissionFor = (g, amount) => g.settings.commissionType === 'flat' ? g.settings.commission : amount * g.settings.commission / 100;
 
@@ -155,10 +248,66 @@ function fill(p, g, o, price) {
   if (o.action === 'short') { pos.avg = (pos.avg * -pos.qty + amount) / (-pos.qty + o.qty); pos.qty -= o.qty; p.cash += amount - fee; }
   if (o.action === 'cover') { pos.qty += o.qty; p.cash -= amount + fee; }
   if (pos.qty === 0) delete p.positions[o.symbol]; else p.positions[o.symbol] = pos;
+  finishFill(p, o, price, fee);
+}
+function finishFill(p, o, price, fee) {
   Object.assign(o, { status: 'filled', filledAt: Date.now(), fillPrice: price, fee });
   p.tradesByDay[nyDate()] = (p.tradesByDay[nyDate()] || 0) + 1;
   p.history.unshift({ ...o });
   p.orders = p.orders.filter(x => x.id !== o.id);
+}
+
+// ---------- option orders ----------
+const optionFee = (g, qty, amount) => commissionFor(g, amount) + qty * (g.settings.optionCommission || 0);
+const optBuySide = o => o.action === 'bto' || o.action === 'btc';
+function validateOptionOrder(p, g, o, oq, v) {
+  const s = g.settings;
+  if (!gameActive(g)) return 'This game is not active.';
+  if (!s.allowOptions) return 'Options trading is disabled for this game.';
+  if (oq.expired) return 'This contract has expired.';
+  if (!(o.qty > 0) || !Number.isInteger(o.qty)) return 'Contracts must be a whole number above zero.';
+  if (o.type === 'limit' && !s.allowLimit) return 'Limit orders are disabled.';
+  const pos = (p.options || {})[o.key];
+  if (o.action === 'stc' && (!pos || pos.qty < o.qty)) return `You only hold ${pos?.qty > 0 ? pos.qty : 0} contracts.`;
+  if (o.action === 'btc' && (!pos || -pos.qty < o.qty)) return `You have only written ${pos?.qty < 0 ? -pos.qty : 0} contracts.`;
+  if (o.action === 'bto' && pos?.qty < 0) return 'Buy to close your written contracts first.';
+  if (o.action === 'sto') {
+    if (!s.allowOptionWriting) return 'Writing options (sell to open) is disabled for this game.';
+    if (pos?.qty > 0) return 'Sell to close your contracts first.';
+  }
+  if (s.dailyTradeLimit && (p.tradesByDay[nyDate()] || 0) >= s.dailyTradeLimit) return `Daily limit of ${s.dailyTradeLimit} trades reached.`;
+  const bp = buyingPower(p, g, v);
+  if (optBuySide(o)) {
+    const cost = o.qty * 100 * (o.limitPrice || oq.ask);
+    if (cost + optionFee(g, o.qty, cost) > bp) return 'Not enough buying power for this order.';
+  }
+  if (o.action === 'sto' && o.qty * 100 * oq.underlying * 0.2 > bp) return 'Not enough buying power to cover margin on these contracts.';
+  return null;
+}
+const shouldFillOption = (o, oq) => o.type === 'market' || (optBuySide(o) ? oq.ask <= o.limitPrice : oq.bid >= o.limitPrice);
+const optionFillPrice = (o, oq) => optBuySide(o) ? (o.type === 'limit' ? Math.min(oq.ask, o.limitPrice) : oq.ask) : (o.type === 'limit' ? Math.max(oq.bid, o.limitPrice) : oq.bid);
+function fillOption(p, g, o, price) {
+  p.options ||= {};
+  const amount = o.qty * 100 * price, fee = optionFee(g, o.qty, amount);
+  const pos = p.options[o.key] || { qty: 0, avg: 0 };
+  if (o.action === 'bto') { pos.avg = (pos.avg * pos.qty + price * o.qty) / (pos.qty + o.qty); pos.qty += o.qty; p.cash -= amount + fee; }
+  if (o.action === 'stc') { pos.qty -= o.qty; p.cash += amount - fee; }
+  if (o.action === 'sto') { pos.avg = (pos.avg * -pos.qty + price * o.qty) / (-pos.qty + o.qty); pos.qty -= o.qty; p.cash += amount - fee; }
+  if (o.action === 'btc') { pos.qty += o.qty; p.cash -= amount + fee; }
+  if (pos.qty === 0) delete p.options[o.key]; else p.options[o.key] = pos;
+  finishFill(p, o, price, fee);
+}
+// Expired contracts settle in cash at intrinsic value.
+function settleExpired(p, quotes) {
+  for (const [key, pos] of Object.entries(p.options || {})) {
+    const o = parseKey(key), S = quotes[o.symbol]?.price;
+    if (Date.now() < expiryTime(o.exp) || S == null) continue;
+    const intrinsic = r2(Math.max(0, o.type === 'C' ? S - o.strike : o.strike - S));
+    p.cash += pos.qty * 100 * intrinsic;
+    const status = intrinsic > 0 ? 'exercised' : 'expired';
+    p.history.unshift({ id: rid(), asset: 'option', key, desc: optionLabel(o), symbol: o.symbol, action: pos.qty > 0 ? 'stc' : 'btc', qty: Math.abs(pos.qty), type: 'market', status, created: Date.now(), filledAt: Date.now(), fillPrice: intrinsic, fee: 0 });
+    delete p.options[key];
+  }
 }
 const fillPrice = (o, price) => o.type === 'limit' ? (o.action === 'buy' || o.action === 'cover' ? Math.min(price, o.limitPrice) : Math.max(price, o.limitPrice)) : price;
 
@@ -183,15 +332,26 @@ function closeOrder(p, o, status, reason) {
 
 // Orders are checked whenever their owner has Bullpen open (there is no server).
 async function processOrders(p, g) {
-  if (!p.orders.length) return false;
+  const expiring = Object.keys(p.options || {}).some(k => Date.now() >= expiryTime(parseKey(k).exp));
+  if (!p.orders.length && !expiring) return false;
   const open = marketOpen(), today = nyDate();
-  const quotes = await getQuotes(p.orders.map(o => o.symbol));
+  const pending = { positions: Object.fromEntries(p.orders.map(o => [o.symbol, {}])), options: Object.fromEntries(p.orders.filter(o => o.asset === 'option').map(o => [o.key, {}])) };
+  const mk = await marks([p, pending]);
+  settleExpired(p, mk.quotes);
   for (const o of [...p.orders]) {
     if (o.duration === 'day' && o.day !== today && o.type !== 'market') { closeOrder(p, o, 'expired'); continue; }
     if (o.duration === 'gtc' && Date.now() - o.created > 90 * 864e5) { closeOrder(p, o, 'expired'); continue; }
-    const q = quotes[o.symbol]; if (!q || !open) continue;
+    if (o.asset === 'option') {
+      const oq = mk.optq[o.key]; if (!oq) continue;
+      if (oq.expired) { closeOrder(p, o, 'expired'); continue; }
+      if (!open || !shouldFillOption(o, oq)) continue;
+      const err = validateOptionOrder(p, g, { ...o }, oq, valuation(p, mk.quotes, mk.optq));
+      if (err) closeOrder(p, o, 'cancelled', err); else fillOption(p, g, o, optionFillPrice(o, oq));
+      continue;
+    }
+    const q = mk.quotes[o.symbol]; if (!q || !open) continue;
     if (shouldFill(o, q.price)) {
-      const err = validateOrder(p, g, { ...o }, q, valuation(p, quotes));
+      const err = validateOrder(p, g, { ...o }, q, valuation(p, mk.quotes, mk.optq));
       if (err) closeOrder(p, o, 'cancelled', err); else fill(p, g, o, fillPrice(o, q.price));
     }
   }
@@ -212,8 +372,8 @@ function accrueInterest(p, g) {
 
 async function portfolioView(p, g, own) {
   if (own) { accrueInterest(p, g); await processOrders(p, g); }
-  const quotes = await getQuotes(Object.keys(p.positions));
-  const v = valuation(p, quotes);
+  const mk = await marks([p]);
+  const v = valuation(p, mk.quotes, mk.optq);
   if (own) { p.snapshots[nyDate()] = Math.round(v.equity * 100) / 100; await store.savePlayer(g.id, p.userId, p); }
   const start = g.settings.startingCash;
   return {
@@ -226,9 +386,9 @@ async function portfolioView(p, g, own) {
 
 async function rankings(g) {
   const players = await store.listPlayers(g.id);
-  const quotes = await getQuotes(players.flatMap(p => Object.keys(p.positions)));
+  const mk = await marks(players);
   return players.map(p => {
-    const v = valuation(p, quotes);
+    const v = valuation(p, mk.quotes, mk.optq);
     return { playerId: p.userId, userId: p.userId, name: p.name || 'Player', picture: p.picture, equity: v.equity, gain: v.equity - g.settings.startingCash, gainPct: ((v.equity - g.settings.startingCash) / g.settings.startingCash) * 100 };
   }).sort((a, b) => b.equity - a.equity).map((r, i) => ({ ...r, rank: i + 1 }));
 }
@@ -271,6 +431,18 @@ route('GET', '/api/quote', ({ url }) => getQuotes((url.searchParams.get('symbols
 route('GET', '/api/search', ({ url }) => search(url.searchParams.get('q') || ''));
 route('GET', '/api/market', async () => ({ open: marketOpen(), indices: await getQuotes(['SPY', 'DIA', 'QQQ', 'IWM', 'GLD']), movers: await getQuotes(['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM']) }));
 
+route('GET', '/api/options/:sym', async ({ url, params }) => {
+  const sym = params.sym.toUpperCase(), u = await getQuote(sym), { vol, div } = await getVol(sym);
+  const exps = expirations(), want = url.searchParams.get('exp');
+  const exp = exps.includes(want) ? want : exps[0];
+  const strikes = strikeList(u.price);
+  const chain = type => strikes.map(strike => priceOption({ symbol: sym, exp, type, strike }, u.price, vol, div));
+  return { quote: u, vol, expirations: exps, exp, calls: chain('C'), puts: chain('P') };
+});
+route('GET', '/api/option', async ({ url }) => {
+  const o = parseKey(url.searchParams.get('key')), u = await getQuote(o.symbol), { vol, div } = await getVol(o.symbol);
+  return priceOption(o, u.price, vol, div);
+});
 route('GET', '/api/watchlist', async ({ user }) => ({ symbols: user.watchlist, quotes: await getQuotes(user.watchlist) }));
 route('PUT', '/api/watchlist', async ({ user, body }) => { user.watchlist = [...new Set((body.symbols || []).map(s => String(s).toUpperCase()))].slice(0, 50); await store.saveUser(user.id, { watchlist: user.watchlist }); return { symbols: user.watchlist }; });
 
@@ -329,7 +501,7 @@ route('POST', '/api/games/:gid/reset', async ({ user, params }) => {
   const g = await mustGame(params.gid), p = await store.getPlayer(g.id, user.id);
   if (!p) throw httpError(404, 'Not in game.');
   if (!g.settings.allowReset) throw httpError(403, 'Portfolio resets are disabled for this game.');
-  await store.savePlayer(g.id, user.id, { ...p, cash: g.settings.startingCash, positions: {}, orders: [], history: [], snapshots: {}, tradesByDay: {} });
+  await store.savePlayer(g.id, user.id, { ...p, cash: g.settings.startingCash, positions: {}, options: {}, orders: [], history: [], snapshots: {}, tradesByDay: {} });
   return { ok: true };
 });
 
@@ -345,6 +517,7 @@ route('GET', '/api/games/:gid/portfolio', async ({ user, params, url }) => {
 route('POST', '/api/games/:gid/orders', async ({ user, params, body }) => {
   const g = await mustGame(params.gid), p = await store.getPlayer(params.gid, user.id);
   if (!p) throw httpError(404, 'Join this game first.');
+  if (body.asset === 'option') return placeOptionOrder(g, p, user, body);
   const o = {
     id: rid(), symbol: String(body.symbol || '').toUpperCase(), action: body.action, qty: Number(body.qty),
     type: body.type || 'market', duration: body.duration === 'gtc' ? 'gtc' : 'day', created: Date.now(), day: nyDate(), status: 'open', trailUnit: body.trailUnit === '$' ? '$' : '%',
@@ -356,13 +529,29 @@ route('POST', '/api/games/:gid/orders', async ({ user, params, body }) => {
   if (!['market', 'limit', 'stop', 'trailing'].includes(o.type)) throw httpError(400, 'Unknown order type.');
   if ((o.type === 'limit' && !(o.limitPrice > 0)) || (o.type === 'stop' && !(o.stopPrice > 0)) || (o.type === 'trailing' && !(o.trail > 0))) throw httpError(400, 'Enter a price for this order type.');
   let q; try { q = await getQuote(o.symbol); } catch { throw httpError(400, `Couldn't find ${o.symbol}.`); }
-  const v = valuation(p, await getQuotes(Object.keys(p.positions)));
-  const err = validateOrder(p, g, o, q, v); if (err) throw httpError(400, err);
+  const mk = await marks([p]);
+  const err = validateOrder(p, g, o, q, valuation(p, mk.quotes, mk.optq)); if (err) throw httpError(400, err);
   p.orders.push(o);
   if (marketOpen() && shouldFill(o, q.price)) fill(p, g, o, fillPrice(o, q.price));
   await store.savePlayer(g.id, user.id, p);
   return { order: o, filled: o.status === 'filled', marketOpen: marketOpen() };
 });
+async function placeOptionOrder(g, p, user, body) {
+  const c = parseKey(body.key);
+  const o = {
+    id: rid(), asset: 'option', key: optionKey(c), symbol: c.symbol, desc: optionLabel(c), action: body.action, qty: Number(body.qty),
+    type: body.type === 'limit' ? 'limit' : 'market', duration: body.duration === 'gtc' ? 'gtc' : 'day', created: Date.now(), day: nyDate(), status: 'open',
+  };
+  if (o.type === 'limit') { o.limitPrice = Number(body.limitPrice); if (!(o.limitPrice > 0)) throw httpError(400, 'Enter a limit price.'); }
+  if (!['bto', 'sto', 'btc', 'stc'].includes(o.action)) throw httpError(400, 'Choose an option action.');
+  const mk = await marks([p, { options: { [o.key]: {} } }]), oq = mk.optq[o.key];
+  if (!oq) throw httpError(400, `Couldn't price ${o.desc}.`);
+  const err = validateOptionOrder(p, g, o, oq, valuation(p, mk.quotes, mk.optq)); if (err) throw httpError(400, err);
+  p.orders.push(o);
+  if (marketOpen() && shouldFillOption(o, oq)) fillOption(p, g, o, optionFillPrice(o, oq));
+  await store.savePlayer(g.id, user.id, p);
+  return { order: o, filled: o.status === 'filled', marketOpen: marketOpen() };
+}
 route('DELETE', '/api/games/:gid/orders/:oid', async ({ user, params }) => {
   const p = await store.getPlayer(params.gid, user.id); const o = p?.orders.find(o => o.id === params.oid);
   if (!o) throw httpError(404, 'Order not found.');
@@ -387,6 +576,6 @@ setInterval(async () => {
   if (!me || !marketOpen()) return;
   for (const g of await store.myGames(me.id)) {
     const p = await store.getPlayer(g.id, me.id);
-    if (p?.orders.length && await processOrders(p, g)) await store.savePlayer(g.id, me.id, p);
+    if ((p?.orders.length || Object.keys(p?.options || {}).length) && await processOrders(p, g)) await store.savePlayer(g.id, me.id, p);
   }
 }, 30000);
