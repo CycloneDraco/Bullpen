@@ -13,7 +13,7 @@ async function firebaseStore(cfg) {
   const d = (...p) => F.doc(db, ...p);
   const data = s => s.exists() ? { id: s.id, ...s.data() } : null;
   let user = null;
-  const toUser = (u, name) => u && { id: u.uid, name: name || u.displayName || u.email.split('@')[0], email: u.email, picture: u.photoURL, provider: u.providerData[0]?.providerId === 'password' ? 'email' : 'google' };
+  const toUser = (u, name) => u && { id: u.uid, name: name || u.displayName || u.email.split('@')[0], email: u.email, picture: u.photoURL, emailVerified: u.emailVerified, created: Date.parse(u.metadata.creationTime) || Date.now(), provider: u.providerData[0]?.providerId === 'password' ? 'email' : 'google' };
   const ready = new Promise(res => A.onAuthStateChanged(auth, u => { user = toUser(u); res(); }));
   return {
     mode: 'firebase', ready,
@@ -27,6 +27,21 @@ async function firebaseStore(cfg) {
     },
     resetPassword: email => A.sendPasswordResetEmail(auth, email),
     signOut: () => A.signOut(auth).then(() => { user = null; }),
+    // Sensitive account changes need a fresh sign-in: password for email accounts, a Google popup otherwise.
+    async reauth(password) {
+      const u = auth.currentUser;
+      if (user.provider === 'email') await A.reauthenticateWithCredential(u, A.EmailAuthProvider.credential(u.email, password || ''));
+      else await A.reauthenticateWithPopup(u, new A.GoogleAuthProvider());
+    },
+    setAuthName: name => A.updateProfile(auth.currentUser, { displayName: name }),
+    async changePassword(current, next) { await this.reauth(current); await A.updatePassword(auth.currentUser, next); },
+    async changeEmail(current, email) { await this.reauth(current); await A.verifyBeforeUpdateEmail(auth.currentUser, email); },
+    sendVerification: () => A.sendEmailVerification(auth.currentUser),
+    async reloadUser() { await auth.currentUser.reload(); return user = { ...user, emailVerified: auth.currentUser.emailVerified }; },
+    deleteAuthUser: () => A.deleteUser(auth.currentUser).then(() => { user = null; }),
+    getProfile: async uid => data(await F.getDoc(d('profiles', uid))),
+    saveProfile: (uid, p) => F.setDoc(d('profiles', uid), p, { merge: true }),
+    deleteUserDocs: uid => Promise.all([F.deleteDoc(d('users', uid)), F.deleteDoc(d('profiles', uid))]),
     getUser: async uid => data(await F.getDoc(d('users', uid))),
     saveUser: (uid, u) => F.setDoc(d('users', uid), u, { merge: true }),
     getGame: async gid => data(await F.getDoc(d('games', gid))),
@@ -85,6 +100,16 @@ function localStore() {
       return { id, ...db.users[id] };
     },
     async signOut() { db.session = null; persist(); },
+    async reauth() {},
+    async setAuthName() {},
+    async changePassword() { throw new Error('Passwords aren’t used in offline mode.'); },
+    async changeEmail() { throw new Error('Email isn’t used in offline mode.'); },
+    async sendVerification() {},
+    async reloadUser() { return this.currentUser(); },
+    async deleteAuthUser() { db.session = null; persist(); },
+    getProfile: async uid => db.users[uid] ? clone({ id: uid, name: db.users[uid].name, picture: db.users[uid].picture, bio: db.users[uid].bio, color: db.users[uid].color, joined: db.users[uid].joined }) : null,
+    async saveProfile() {},
+    async deleteUserDocs(uid) { delete db.users[uid]; persist(); },
     getUser: async uid => db.users[uid] ? clone({ id: uid, ...db.users[uid] }) : null,
     async saveUser(uid, u) { db.users[uid] = { ...db.users[uid], ...clone(u) }; persist(); },
     getGame: async gid => clone(db.games[gid]) || null,

@@ -168,7 +168,7 @@ function cleanSettings(input, base = DEFAULT_SETTINGS) {
   s.startingCash = Math.min(Math.max(s.startingCash, 1000), 100000000);
   return s;
 }
-const newPlayer = (g, user) => ({ userId: user.id, name: user.name, picture: user.picture || '', cash: g.settings.startingCash, positions: {}, options: {}, orders: [], history: [], snapshots: {}, joined: Date.now(), tradesByDay: {} });
+const newPlayer = (g, user) => ({ userId: user.id, name: user.name, picture: user.picture || '', color: user.color || '', cash: g.settings.startingCash, positions: {}, options: {}, orders: [], history: [], snapshots: {}, joined: Date.now(), tradesByDay: {} });
 function gameActive(g) {
   const today = nyDate();
   return today >= g.settings.startDate && (!g.settings.endDate || today <= g.settings.endDate);
@@ -389,7 +389,7 @@ async function rankings(g) {
   const mk = await marks(players);
   return players.map(p => {
     const v = valuation(p, mk.quotes, mk.optq);
-    return { playerId: p.userId, userId: p.userId, name: p.name || 'Player', picture: p.picture, equity: v.equity, gain: v.equity - g.settings.startingCash, gainPct: ((v.equity - g.settings.startingCash) / g.settings.startingCash) * 100 };
+    return { playerId: p.userId, userId: p.userId, name: p.name || 'Player', picture: p.picture, color: p.color, equity: v.equity, gain: v.equity - g.settings.startingCash, gainPct: ((v.equity - g.settings.startingCash) / g.settings.startingCash) * 100 };
   }).sort((a, b) => b.equity - a.equity).map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
@@ -411,8 +411,10 @@ async function loadMe() {
   if (!u) { me = null; return null; }
   if (me?.id === u.id) return me;
   const saved = await store.getUser(u.id);
-  me = { watchlist: ['AAPL', 'MSFT', 'NVDA', 'SPY'], ...saved, ...u, id: u.id, prefs: { ...DEFAULT_PREFS, ...saved?.prefs } };
-  await store.saveUser(u.id, { name: me.name, email: me.email || '', picture: me.picture || '', prefs: me.prefs, watchlist: me.watchlist, lastLogin: Date.now() });
+  // A profile the user has saved beats whatever their sign-in provider says.
+  me = { watchlist: ['AAPL', 'MSFT', 'NVDA', 'SPY'], bio: '', color: '', joined: u.created || Date.now(), ...u, ...saved, id: u.id, email: u.email, provider: u.provider, emailVerified: u.emailVerified, prefs: { ...DEFAULT_PREFS, ...saved?.prefs } };
+  await store.saveUser(u.id, { name: me.name, email: me.email || '', picture: me.picture || '', bio: me.bio, color: me.color, joined: me.joined, prefs: me.prefs, watchlist: me.watchlist, lastLogin: Date.now() });
+  if (!saved) await store.saveProfile(u.id, publicProfile(me)).catch(() => {});
   await ensureDefaultGame(me);
   return me;
 }
@@ -421,6 +423,27 @@ export async function signInEmail(email, password) { await store.signInEmail(ema
 export async function signUpEmail(name, email, password) { await store.signUpEmail(name, email, password); me = null; return loadMe(); }
 export const resetPassword = email => store.resetPassword(email);
 export async function signOut() { await store.signOut(); me = null; }
+const publicProfile = u => ({ name: u.name, picture: u.picture || '', bio: u.bio || '', color: u.color || '', joined: u.joined || Date.now() });
+
+// Account security actions go straight to the auth provider.
+export const account = {
+  changePassword: (current, next) => store.changePassword(current, next),
+  changeEmail: (current, email) => store.changeEmail(current, email),
+  sendVerification: () => store.sendVerification(),
+  async refresh() { const u = await store.reloadUser(); if (me) me.emailVerified = u.emailVerified; return me; },
+  // Removes owned games, leaves the rest, deletes the profile, then the sign-in itself.
+  async deleteAccount(password) {
+    await store.reauth(password);
+    const user = await loadMe();
+    for (const g of await store.myGames(user.id)) {
+      if (g.owner === user.id) await store.deleteGame(g.id);
+      else await store.leave(g.id, user.id).catch(() => {});
+    }
+    await store.deleteUserDocs(user.id);
+    await store.deleteAuthUser();
+    me = null;
+  },
+};
 
 // ---------- routes ----------
 const routes = [];
@@ -428,6 +451,41 @@ const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' 
 const mustGame = async gid => { const g = await store.getGame(gid); if (!g) throw httpError(404, 'Game not found.'); return g; };
 
 route('GET', '/api/me', ({ user }) => ({ user }));
+route('PATCH', '/api/me/profile', async ({ user, body }) => {
+  const name = String(body.name ?? user.name).trim().slice(0, 40);
+  if (!name) throw httpError(400, 'Your display name can’t be empty.');
+  const picture = body.picture === undefined ? user.picture : String(body.picture || '');
+  if (picture && !/^(data:image\/(jpeg|png|webp);base64,|https:\/\/)/.test(picture)) throw httpError(400, 'That picture format isn’t supported.');
+  if (picture.length > 150000) throw httpError(400, 'That picture is too large.');
+  Object.assign(user, { name, picture, bio: String(body.bio ?? user.bio ?? '').slice(0, 160), color: /^#[0-9a-f]{6}$/i.test(body.color) ? body.color : user.color || '' });
+  await store.saveUser(user.id, { name: user.name, picture: user.picture, bio: user.bio, color: user.color });
+  await store.saveProfile(user.id, publicProfile(user)).catch(() => {});
+  if (body.name !== undefined) await store.setAuthName(name).catch(() => {});
+  // Rankings read names and pictures from each game's player record.
+  await Promise.all((await store.myGames(user.id)).map(async g => {
+    const p = await store.getPlayer(g.id, user.id);
+    if (p) await store.savePlayer(g.id, user.id, { ...p, name: user.name, picture: user.picture, color: user.color });
+  }));
+  return { user };
+});
+route('GET', '/api/profiles/:uid', async ({ user, params }) => {
+  const uid = params.uid, self = uid === user.id;
+  const games = (await store.myGames(uid)).filter(g => self || !g.sandboxOf);
+  const pairs = (await Promise.all(games.map(async g => [g, await store.getPlayer(g.id, uid)]))).filter(([, p]) => p);
+  const first = pairs[0]?.[1];
+  const profile = self ? publicProfile(user) : await store.getProfile(uid).catch(() => null) || (first && { name: first.name, picture: first.picture, color: first.color });
+  if (!profile) throw httpError(404, 'Player not found.');
+  const mk = await marks(pairs.map(([, p]) => p));
+  const results = pairs.map(([g, p]) => {
+    const v = valuation(p, mk.quotes, mk.optq), start = g.settings.startingCash;
+    return { gameId: g.id, game: g.settings.name, sandbox: !!g.sandboxOf, equity: v.equity, gainPct: (v.equity - start) / start * 100, trades: p.history.filter(o => o.status === 'filled').length, positions: Object.keys(p.positions).length + Object.keys(p.options || {}).length, canView: self || g.settings.showPortfolios };
+  });
+  return { id: uid, self, ...profile, results };
+});
+route('GET', '/api/me/export', async ({ user }) => {
+  const games = await store.myGames(user.id);
+  return { exported: new Date().toISOString(), user, games: await Promise.all(games.map(async g => ({ game: g.settings, portfolio: await store.getPlayer(g.id, user.id) }))) };
+});
 route('PATCH', '/api/me/prefs', async ({ user, body }) => { user.prefs = { ...user.prefs, ...body }; await store.saveUser(user.id, { prefs: user.prefs }); return { user }; });
 
 route('GET', '/api/quote', ({ url }) => getQuotes((url.searchParams.get('symbols') || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 40)));

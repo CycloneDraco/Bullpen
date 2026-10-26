@@ -177,3 +177,14 @@ tbody tr.link { cursor: pointer; transition: background .15s; } tbody tr.link:ho
 .chain tr.itm td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .chain tr.picked td { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .chain tr.spot td { text-align: center; font-size: .75rem; font-weight: 700; color: var(--accent); padding: 4px; border-bottom: 2px solid var(--accent); }
+.av { display: inline-grid; place-items: center; border-radius: 50%; object-fit: cover; color: #fff; font-weight: 650; flex-shrink: 0; letter-spacing: 0; }
+.avatar { background: none; overflow: hidden; display: grid; place-items: center; }
+.who { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatches button { width: 30px; height: 30px; border-radius: 50%; border: 0; cursor: pointer; transition: transform .1s ease-out, box-shadow .2s; }
+.swatches button:active { transform: scale(.9); }
+.swatches button.on { box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--ink); }
+details summary.link-like { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
+details summary.link-like::-webkit-details-marker { display: none; }
+details summary.link-like::before { content: "›"; display: inline-block; margin-right: 6px; transition: transform .2s; }
+details[open] summary.link-like::before { transform: rotate(90deg); }

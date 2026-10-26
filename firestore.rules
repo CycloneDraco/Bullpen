@@ -9,6 +9,12 @@ service cloud.firestore {
       allow read, write: if request.auth.uid == uid;
     }
 
+    // Public profile: name, picture, bio. Anyone signed in can view; only you can edit.
+    match /profiles/{uid} {
+      allow read: if signedIn();
+      allow write: if request.auth.uid == uid;
+    }
+
     match /games/{gid} {
       allow read: if signedIn();
       allow create: if signedIn()

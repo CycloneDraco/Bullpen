@@ -1,5 +1,5 @@
 // Bullpen front end — vanilla JS single-page app with hash routing.
-import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut } from './backend.js';
+import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut, account } from './backend.js';
 import CONFIG from './config.js';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -38,6 +38,32 @@ function modal(html, onMount) {
   document.addEventListener('keydown', onKey);
   document.body.append(s); onMount?.(s.firstChild, close);
   return close;
+}
+
+// ---------- avatars ----------
+const AVATAR_COLORS = ['#0a84ff', '#30d158', '#ff9f0a', '#ff375f', '#bf5af2', '#5ac8fa', '#a2845e', '#8e8e93'];
+function avatarHtml(u, size = 32) {
+  const st = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px`;
+  return u?.picture
+    ? `<img class="av" src="${esc(u.picture)}" alt="" style="${st}" referrerpolicy="no-referrer">`
+    : `<span class="av" style="${st};background:${esc(u?.color || AVATAR_COLORS[0])}" aria-hidden="true">${esc((u?.name || '?').trim()[0]?.toUpperCase() || '?')}</span>`;
+}
+// Crop to a centred square and shrink, so a photo fits comfortably in a Firestore document.
+function squareImage(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'), k = Math.min(img.width, img.height);
+      c.width = c.height = size;
+      c.getContext('2d').drawImage(img, (img.width - k) / 2, (img.height - k) / 2, k, k, 0, 0, size, size);
+      URL.revokeObjectURL(img.src);
+      let out = c.toDataURL('image/jpeg', 0.85);
+      if (out.length > 140000) out = c.toDataURL('image/jpeg', 0.6);
+      resolve(out);
+    };
+    img.onerror = () => reject(new Error('That file isn’t an image we can read.'));
+    img.src = URL.createObjectURL(file);
+  });
 }
 
 // ---------- theme & prefs ----------
@@ -125,9 +151,9 @@ const activeGame = () => state.games.mine.find(g => g.id === state.gameId);
 function renderShell() {
   $('#nav').hidden = false;
   const u = state.me, av = $('#avatarBtn');
-  av.style.backgroundImage = u.picture ? `url("${u.picture}")` : ''; av.textContent = u.picture ? '' : (u.name || '?')[0].toUpperCase();
+  av.innerHTML = avatarHtml(u, 32);
   av.setAttribute('aria-label', 'Account: ' + u.name);
-  $('#menuHead').innerHTML = `<b>${esc(u.name)}</b><div class="muted">${esc(u.email || 'Offline account')}</div>`;
+  $('#menuHead').innerHTML = `<div class="row" style="flex-wrap:nowrap">${avatarHtml(u, 36)}<div style="min-width:0"><b>${esc(u.name)}</b><div class="muted" style="overflow:hidden;text-overflow:ellipsis">${esc(u.email || 'Offline account')}</div></div></div>`;
 }
 $('#avatarBtn').addEventListener('click', e => { e.stopPropagation(); $('#avatarMenu').hidden = !$('#avatarMenu').hidden; });
 document.addEventListener('click', () => { $('#avatarMenu').hidden = true; });
@@ -607,7 +633,7 @@ async function viewGame(gid) {
       ${g.joined && !g.isOwner && !g.sandbox ? '<button class="btn secondary" id="leave">Leave</button>' : ''}</div></div>
     <div class="grid g4" style="margin-bottom:var(--gap)">${[['Players', g.players], ['Starting cash', money(s.startingCash)], ['Starts', g.sandbox ? '—' : s.startDate], ['Ends', g.sandbox ? '—' : s.endDate || 'No end date']].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value" style="font-size:1.15rem">${v}</div></div>`).join('')}</div>
     <div class="grid g2"><div class="card"><div class="card-head"><h2>Rankings</h2><span class="muted small">Live</span></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Player</th><th class="r">Account value</th><th class="r">Return</th></tr></thead><tbody>
-      ${rankings.map(r => `<tr class="${s.showPortfolios || r.userId === state.me.id ? 'link' : ''}" ${s.showPortfolios || r.userId === state.me.id ? `data-go="#/portfolio${r.userId === state.me.id ? '' : '?player=' + r.playerId}"` : ''}><td><span class="rank r${r.rank}">${r.rank}</span></td><td><b>${esc(r.name)}</b>${r.userId === state.me.id ? ' <span class="badge">You</span>' : ''}</td><td class="r">${money(r.equity)}</td><td class="r ${cls(r.gain)}">${pct(r.gainPct)}</td></tr>`).join('')}</tbody></table></div></div>
+      ${rankings.map(r => `<tr class="${s.showPortfolios || r.userId === state.me.id ? 'link' : ''}" ${s.showPortfolios || r.userId === state.me.id ? `data-go="#/portfolio${r.userId === state.me.id ? '' : '?player=' + r.playerId}"` : ''}><td><span class="rank r${r.rank}">${r.rank}</span></td><td><a href="#/profile/${encodeURIComponent(r.userId)}" class="who">${avatarHtml(r, 28)}<b>${esc(r.name)}</b></a>${r.userId === state.me.id ? ' <span class="badge">You</span>' : ''}</td><td class="r">${money(r.equity)}</td><td class="r ${cls(r.gain)}">${pct(r.gainPct)}</td></tr>`).join('')}</tbody></table></div></div>
       <div class="stack">${!g.sandbox ? `<div class="card"><h3>Invite players</h3><p class="muted small">Share this link${g.hasPassword ? ' and the game password' : ''}.</p><div class="row" style="flex-wrap:nowrap"><input value="${esc(link)}" readonly id="lnk"><button class="btn secondary sm" id="copy">Copy</button></div><div class="hint">Game ID: ${g.id}</div></div>` : ''}
         <div class="card small"><h3 style="margin-bottom:6px">Rules</h3><div class="muted">Commission ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) : s.commission + '%') : 'free'} · Short selling ${s.allowShort ? 'on' : 'off'} · Margin ${s.allowMargin ? 'on' : 'off'} · Late entry ${s.allowLateEntry ? 'on' : 'off'} · Resets ${s.allowReset ? 'on' : 'off'} · ${s.privacy === 'public' ? 'Public' : 'Private'}</div></div></div></div>
     ${g.isOwner ? `<h2 style="margin:32px 0 14px">Game settings</h2><form id="sf" class="grid g-half">${settingsForm(s, g.sandbox)}<div class="card" style="align-self:start"><button class="btn block">Save settings</button>${!g.sandbox ? '<button type="button" class="btn danger block" id="del" style="margin-top:10px">Delete game</button>' : ''}</div></form>` : ''}</div>`;
@@ -641,11 +667,115 @@ function viewSettings() {
       <label class="field" style="margin-top:12px"><span>Default chart range</span><select data-k="defaultRange">${['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y'].map(r => `<option ${p.defaultRange === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
       <label class="field" style="margin-top:12px"><span>Default game</span><select data-k="defaultGame"><option value="">Last used</option>${state.games.mine.map(g => `<option value="${g.id}" ${p.defaultGame === g.id ? 'selected' : ''}>${esc(g.settings.name)}</option>`).join('')}</select></label>
     </div>
-    <div class="card"><h2 style="margin-bottom:10px">Account</h2><div class="row"><div class="avatar" style="width:48px;height:48px;font-size:1.2rem;display:grid;place-items:center;background-image:${state.me.picture ? `url('${esc(state.me.picture)}')` : 'none'}">${state.me.picture ? '' : esc(state.me.name[0])}</div><div><b>${esc(state.me.name)}</b><div class="muted small">${esc(state.me.email || 'Offline account')}</div><div class="muted small">${store.mode !== 'firebase' ? 'Offline mode (this browser only)' : store.currentUser()?.provider === 'email' ? 'Signed in with email' : 'Signed in with Google'}</div></div></div></div>
+    <div class="card stack" id="profileCard"><div class="card-head" style="margin:0"><h2>Profile</h2><a href="#/profile" class="small">View profile</a></div>
+      <div class="row" style="gap:16px"><div id="avPrev">${avatarHtml(state.me, 72)}</div>
+        <div class="row"><label class="btn secondary sm" style="cursor:pointer">Upload photo<input type="file" accept="image/*" id="avFile" hidden></label>
+          ${store.currentUser()?.provider === 'google' && store.currentUser()?.picture ? '<button class="btn ghost sm" id="avGoogle">Use Google photo</button>' : ''}
+          <button class="btn ghost sm" id="avRemove">Remove photo</button></div></div>
+      <div><div class="muted small" style="font-weight:600;margin-bottom:6px">Colour (used when there’s no photo)</div><div class="swatches">${AVATAR_COLORS.map(c => `<button type="button" data-c="${c}" style="background:${c}" aria-label="Colour ${c}"></button>`).join('')}</div></div>
+      <label class="field"><span>Display name</span><input id="pfName" maxlength="40" value="${esc(state.me.name)}" autocomplete="nickname"></label>
+      <label class="field"><span>Bio</span><textarea id="pfBio" maxlength="160" rows="2" placeholder="Value investor. Options degen. Etc.">${esc(state.me.bio || '')}</textarea><div class="hint"><span id="bioCount">${(state.me.bio || '').length}</span>/160</div></label>
+      <button class="btn" id="pfSave" style="align-self:flex-start">Save profile</button></div>
+    <div class="card stack" id="securityCard"><h2>Sign-in &amp; security</h2></div>
+    <div class="card stack"><h2>Your data</h2>
+      <div class="row"><div style="flex:1;min-width:200px"><b>Download your data</b><div class="muted small">Every portfolio, order and setting, as a JSON file.</div></div><button class="btn secondary sm" id="exportBtn">Download</button></div>
+      <div class="row"><div style="flex:1;min-width:200px"><b>Sign out</b><div class="muted small">Sign out of Bullpen on this device.</div></div><button class="btn secondary sm" id="signOut2">Sign out</button></div>
+      <div class="row"><div style="flex:1;min-width:200px"><b class="down">Delete account</b><div class="muted small">Deletes your profile, your portfolios and every game you created.</div></div><button class="btn danger sm" id="deleteBtn">Delete…</button></div></div>
   </div></div>`;
   $$('.seg[data-k]').forEach(sg => $$('button', sg).forEach(b => b.onclick = async () => { $$('button', sg).forEach(x => x.classList.toggle('on', x === b)); await savePrefs({ [sg.dataset.k]: b.dataset.v }); }));
   $$('input[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.checked }).then(() => toast('Saved.')));
   $$('select[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.value || null }).then(() => toast('Saved.')));
+  mountAccountSettings();
+  if (location.hash.includes('edit=profile')) $('#profileCard').scrollIntoView({ block: 'start' });
+}
+
+function mountAccountSettings() {
+  const me = state.me, draft = { picture: me.picture || '', color: me.color || AVATAR_COLORS[0] };
+  const preview = () => { $('#avPrev').innerHTML = avatarHtml({ ...me, ...draft, name: $('#pfName').value || me.name }, 72); $$('.swatches button').forEach(b => b.classList.toggle('on', b.dataset.c === draft.color)); };
+  preview();
+  $('#avFile').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { draft.picture = await squareImage(f); preview(); toast('Photo ready. Save your profile to keep it.'); } catch (err) { toast(err.message, true); } e.target.value = ''; };
+  $('#avRemove').onclick = () => { draft.picture = ''; preview(); };
+  $('#avGoogle')?.addEventListener('click', () => { draft.picture = store.currentUser().picture; preview(); });
+  $$('.swatches button').forEach(b => b.onclick = () => { draft.color = b.dataset.c; preview(); });
+  $('#pfName').oninput = preview;
+  $('#pfBio').oninput = e => { $('#bioCount').textContent = e.target.value.length; };
+  $('#pfSave').onclick = async () => {
+    const btn = $('#pfSave'); btn.disabled = true;
+    try { state.me = (await api('/api/me/profile', { method: 'PATCH', body: { name: $('#pfName').value, bio: $('#pfBio').value, ...draft } })).user; renderShell(); toast('Profile saved.'); }
+    catch (err) { toast(err.message, true); }
+    btn.disabled = false;
+  };
+
+  // Sign-in & security
+  const sec = $('#securityCard'), fb = store.mode === 'firebase', email = fb && me.provider === 'email';
+  const authMsg = e => ({ 'auth/invalid-credential': 'Your current password is wrong.', 'auth/wrong-password': 'Your current password is wrong.', 'auth/weak-password': 'Use at least 6 characters.', 'auth/email-already-in-use': 'Another account already uses that email.', 'auth/invalid-email': 'That email address doesn’t look right.', 'auth/requires-recent-login': 'Sign out and back in, then try again.', 'auth/too-many-requests': 'Too many attempts. Wait a minute and try again.', 'auth/popup-closed-by-user': 'Sign-in was cancelled.' }[e.code] || e.message);
+  sec.innerHTML = `<h2>Sign-in &amp; security</h2>
+    ${!fb ? '<p class="muted small" style="margin:0">Offline mode: this account lives only in this browser. Connect Firebase for real sign-in.</p>' : `
+    <div class="row"><div style="flex:1;min-width:200px"><b>${esc(me.email)}</b><div class="muted small">${email ? 'Email and password' : 'Google account'}</div></div>
+      ${email ? (me.emailVerified ? '<span class="badge live">Verified</span>' : '<span class="badge closed">Not verified</span>') : '<span class="badge live">Google</span>'}</div>
+    ${email && !me.emailVerified ? '<div class="row"><button class="btn secondary sm" id="verifyBtn">Send verification email</button><button class="btn ghost sm" id="verifiedBtn">I’ve verified it</button></div>' : ''}
+    ${email ? `<details><summary class="link-like">Change password</summary><form id="pwForm" class="stack" style="margin-top:12px">
+        <label class="field"><span>Current password</span><input type="password" name="current" autocomplete="current-password" required></label>
+        <label class="field"><span>New password</span><input type="password" name="next" autocomplete="new-password" minlength="6" required></label>
+        <label class="field"><span>Confirm new password</span><input type="password" name="confirm" autocomplete="new-password" minlength="6" required></label>
+        <button class="btn sm" style="align-self:flex-start">Update password</button></form></details>
+      <details><summary class="link-like">Change email</summary><form id="emForm" class="stack" style="margin-top:12px">
+        <label class="field"><span>New email</span><input type="email" name="email" autocomplete="email" required></label>
+        <label class="field"><span>Current password</span><input type="password" name="current" autocomplete="current-password" required></label>
+        <button class="btn sm" style="align-self:flex-start">Send confirmation link</button><div class="hint">We’ll email the new address. The change happens when you click the link.</div></form></details>`
+      : '<p class="muted small" style="margin:0">Your password and email are managed by your Google account.</p>'}`}`;
+  $('#verifyBtn')?.addEventListener('click', async () => { try { await account.sendVerification(); toast(`Verification email sent to ${me.email}.`); } catch (e) { toast(authMsg(e), true); } });
+  $('#verifiedBtn')?.addEventListener('click', async () => { state.me = await account.refresh(); state.me.emailVerified ? (toast('Email verified.'), mountAccountSettings()) : toast('Not verified yet. Click the link in the email first.', true); });
+  $('#pwForm')?.addEventListener('submit', async e => {
+    e.preventDefault(); const f = e.target;
+    if (f.next.value !== f.confirm.value) return toast('The new passwords don’t match.', true);
+    try { await account.changePassword(f.current.value, f.next.value); f.reset(); toast('Password updated.'); } catch (err) { toast(authMsg(err), true); }
+  });
+  $('#emForm')?.addEventListener('submit', async e => {
+    e.preventDefault(); const f = e.target;
+    try { await account.changeEmail(f.current.value, f.email.value.trim()); toast(`Confirmation link sent to ${f.email.value.trim()}.`); f.reset(); } catch (err) { toast(authMsg(err), true); }
+  });
+
+  // Data
+  $('#exportBtn').onclick = async () => {
+    const data = await api('/api/me/export');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    a.download = `bullpen-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  $('#signOut2').onclick = () => $('#signOut').click();
+  $('#deleteBtn').onclick = () => modal(`<h2>Delete your account?</h2>
+    <p class="muted">This permanently deletes your profile, all your portfolios, and every game you created (including other players’ progress in them). You’ll leave games other people created. This can’t be undone.</p>
+    ${email ? '<label class="field"><span>Password</span><input type="password" id="delPw" autocomplete="current-password"></label>' : fb ? '<p class="small muted">You’ll be asked to confirm with Google.</p>' : ''}
+    <label class="field" style="margin-top:12px"><span>Type DELETE to confirm</span><input id="delTxt" autocomplete="off"></label>
+    <div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn danger" data-ok disabled>Delete account</button></div>`, (el, close) => {
+    const ok = $('[data-ok]', el);
+    $('#delTxt', el).oninput = e => { ok.disabled = e.target.value.trim() !== 'DELETE'; };
+    $('[data-x]', el).onclick = close;
+    ok.onclick = async () => {
+      ok.disabled = true;
+      try { await account.deleteAccount($('#delPw', el)?.value); close(); state.me = null; state.games = { mine: [], public: [] }; toast('Your account has been deleted.'); location.hash = '#/'; route(); }
+      catch (err) { toast(authMsg(err), true); ok.disabled = false; }
+    };
+  });
+}
+
+// ---------- profile ----------
+async function viewProfile(uid) {
+  const p = await api('/api/profiles/' + encodeURIComponent(uid || state.me.id));
+  const real = p.results.filter(r => !r.sandbox);
+  const best = real.length ? Math.max(...real.map(r => r.gainPct)) : null;
+  app.innerHTML = `<div class="view">
+    <div class="card"><div class="row" style="gap:20px">${avatarHtml(p, 96)}
+      <div style="flex:1;min-width:200px"><h1>${esc(p.name)}</h1>
+        ${p.bio ? `<p style="margin:6px 0 0">${esc(p.bio)}</p>` : p.self ? '<p class="muted small" style="margin:6px 0 0">No bio yet.</p>' : ''}
+        ${p.joined ? `<div class="muted small" style="margin-top:6px">Member since ${new Date(p.joined).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div>` : ''}</div>
+      ${p.self ? '<a class="btn secondary" href="#/settings?edit=profile">Edit profile</a>' : ''}</div></div>
+    <div class="grid g3" style="margin-top:var(--gap)">${[['Games', real.length], ['Best return', best == null ? '—' : `<span class="${cls(best)}">${pct(best)}</span>`], ['Trades', p.results.reduce((a, r) => a + r.trades, 0)]].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
+    <div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:8px">Games</h2>
+      ${p.results.length ? `<div class="table-wrap"><table><thead><tr><th>Game</th><th class="r">Account value</th><th class="r">Return</th><th class="r">Trades</th><th class="r">Positions</th></tr></thead><tbody>
+      ${p.results.map(r => `<tr class="link" data-go="#/games/${r.gameId}"><td><b>${esc(r.game)}</b>${r.sandbox ? ' <span class="badge">Practice</span>' : ''}</td><td class="r">${money(r.equity)}</td><td class="r ${cls(r.gainPct)}">${pct(r.gainPct)}</td><td class="r">${r.trades}</td><td class="r">${r.positions}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Not in any games yet.</div>'}</div></div>`;
 }
 
 // ---------- router ----------
@@ -668,6 +798,8 @@ async function route() {
     else if (path === '/games/new') viewCreateGame();
     else if (path.startsWith('/games/')) await viewGame(path.split('/')[2]);
     else if (path === '/settings') viewSettings();
+    else if (path === '/profile') await viewProfile();
+    else if (path.startsWith('/profile/')) await viewProfile(decodeURIComponent(path.split('/')[2]));
     else location.hash = '#/';
   } catch (e) { app.innerHTML = `<div class="card empty view">${esc(e.message)}<br><a href="#/" class="btn sm" style="margin-top:12px">Go to dashboard</a></div>`; }
 }
