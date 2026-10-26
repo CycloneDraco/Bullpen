@@ -3,7 +3,6 @@
 import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route } from './app.js';
 import { BADGES, CRYPTO, isCrypto, checkAlerts } from './backend.js';
 import { LESSONS, GLOSSARY } from './learn.js';
-import { CLASS_LESSONS } from './class-lessons.js';
 
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : when(t); };
 const qtyFmt = n => (+n).toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -20,7 +19,7 @@ document.addEventListener('click', e => {
   closeTip();
   const [title, text, lesson] = GLOSSARY[b.dataset.tip];
   tipEl = document.createElement('div'); tipEl.className = 'tip-pop'; tipEl.dataset.for = b.dataset.tip; tipEl.setAttribute('role', 'tooltip');
-  tipEl.innerHTML = `<b>${esc(title)}</b><p>${esc(text)}</p>${lesson ? `<a href="#/lessons/${lesson}">Learn more →</a>` : ''}`;
+  tipEl.innerHTML = `<b>${esc(title)}</b><p>${esc(text)}</p>${lesson ? `<a href="#/learn/${lesson}">Learn more →</a>` : ''}`;
   document.body.append(tipEl);
   const r = b.getBoundingClientRect(), w = tipEl.offsetWidth;
   tipEl.style.left = Math.max(12, Math.min(innerWidth - w - 12, r.left + r.width / 2 - w / 2)) + 'px';
@@ -261,88 +260,24 @@ export async function mountActivity(host, game) {
   await draw();
 }
 
-// ---------- lessons: club weeks + trading basics ----------
+// ---------- learn: trading guides + glossary ----------
 const isRead = id => (state.me.lessonsRead || []).includes(id);
 export function viewLessons() {
-  const club = [...CLASS_LESSONS].reverse(), groups = [...new Set(LESSONS.map(l => l.group))];
-  const done = LESSONS.filter(l => isRead(l.id)).length;
-  app().innerHTML = `<div class="view"><div class="page-head"><div><h1>Lessons</h1><div class="muted small">Missed a club meeting? Every week’s lesson is here, plus quick guides to trading in Bullpen.</div></div></div>
-    <h2 style="margin-bottom:12px">Club lessons</h2>
-    <div class="lesson-grid">${club.map(l => `<a class="card lesson-card ${isRead(l.id) ? 'done' : ''}" href="#/lessons/${l.id}">
-      <div class="row"><span class="badge">Week ${l.week}</span>${l.date ? `<span class="muted small">${new Date(l.date + 'T12:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })}</span>` : ''}<span class="spacer"></span>${isRead(l.id) ? '<span class="badge live">✓ Done</span>' : ''}</div>
-      <h3 style="margin:10px 0 6px;font-size:1.15rem">${esc(l.title)}</h3><p class="muted small" style="margin:0">${esc(l.summary)}</p>
-      <div class="muted small" style="margin-top:10px">${l.mins} min read · ${l.quiz.length}-question quiz</div></a>`).join('')}</div>
-    <div class="card-head" style="margin:32px 0 12px"><h2>Trading basics</h2><span class="muted small">${done} of ${LESSONS.length} read</span></div>
+  const groups = [...new Set(LESSONS.map(l => l.group))], done = LESSONS.filter(l => isRead(l.id)).length;
+  app().innerHTML = `<div class="view"><div class="page-head"><div><h1>Learn</h1><div class="muted small">Short guides to everything you can do in Bullpen.</div></div><span class="muted small">${done} of ${LESSONS.length} read</span></div>
     <div class="progress"><span style="width:${done / LESSONS.length * 100}%"></span></div>
     ${groups.map(gr => `<h3 class="muted" style="margin:18px 0 8px;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em">${gr}</h3>
-      <div class="lesson-list">${LESSONS.filter(l => l.group === gr).map(l => `<a class="card lesson-row ${isRead(l.id) ? 'done' : ''}" href="#/lessons/${l.id}"><span class="check">${isRead(l.id) ? '✓' : ''}</span><b>${esc(l.title)}</b><span class="spacer"></span><span class="muted small">${l.mins} min</span></a>`).join('')}</div>`).join('')}
-    <div class="card" style="margin-top:28px"><h2 style="margin-bottom:10px">Glossary</h2><dl class="glossary">${Object.values(GLOSSARY).sort((a, b) => a[0].localeCompare(b[0])).map(([t, d, l]) => `<dt>${esc(t)}</dt><dd>${esc(d)} ${l ? `<a href="#/lessons/${l}">Lesson →</a>` : ''}</dd>`).join('')}</dl></div></div>`;
-}
-function cycleSvg() {
-  // An idealised wave through the five phases.
-  const pts = [[30, 150], [140, 70], [230, 40], [320, 95], [410, 175], [500, 205], [590, 160], [700, 80]];
-  const d = 'M' + pts.map(p => p.join(',')).join(' L');
-  const label = (x, y, t, n, below) => `<g><circle cx="${x}" cy="${y}" r="7" fill="var(--accent)"/><text x="${x}" y="${below ? y + 30 : y - 16}" text-anchor="middle" class="cy-l">${n}. ${t}</text></g>`;
-  return `<figure class="cycle"><svg viewBox="0 0 730 270" role="img" aria-label="Business cycle: expansion rises to a peak, falls through recession to a depression trough, then recovers.">
-    <line x1="20" x2="720" y1="125" y2="125" stroke="var(--line)" stroke-dasharray="4 6"/><text x="24" y="118" class="cy-a">long-term trend</text>
-    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" style="filter:none"/>
-    ${label(140, 70, 'Expansion', 1)}${label(230, 40, 'Peak', 2)}${label(320, 95, 'Recession', 3, true)}${label(500, 205, 'Depression', 4, true)}${label(640, 125, 'Recovery', 5)}
-    <text x="500" y="262" text-anchor="middle" class="cy-a">trough</text></svg><figcaption class="muted small">An idealised picture. Real phases vary in length and depth, and depressions are rare.</figcaption></figure>`;
-}
-function sectionHtml(s) {
-  if (s.cycle) return cycleSvg();
-  if (s.note) return `<aside class="callout">${esc(s.note)}</aside>`;
-  const h = s.h ? `<h2>${esc(s.h)}</h2>` : '';
-  if (s.p) return h + s.p.map(x => `<p>${esc(x)}</p>`).join('');
-  if (s.points) return h + `<div class="points">${s.points.map(([a, b]) => `<div><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join('')}</div>`;
-  if (s.steps) return h + `<ol class="steps">${s.steps.map(([a, b]) => `<li><b>${esc(a)}</b><span>${esc(b)}</span></li>`).join('')}</ol>`;
-  if (s.table) return h + `<div class="table-wrap"><table class="lesson-table"><thead><tr>${s.table.head.map(x => `<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>${s.table.rows.map(r => `<tr>${r.map(x => `<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  return '';
+      <div class="lesson-list">${LESSONS.filter(l => l.group === gr).map(l => `<a class="card lesson-row ${isRead(l.id) ? 'done' : ''}" href="#/learn/${l.id}"><span class="check">${isRead(l.id) ? '✓' : ''}</span><b>${esc(l.title)}</b><span class="spacer"></span><span class="muted small">${l.mins} min</span></a>`).join('')}</div>`).join('')}
+    <div class="card" style="margin-top:28px"><h2 style="margin-bottom:10px">Glossary</h2><dl class="glossary">${Object.values(GLOSSARY).sort((a, b) => a[0].localeCompare(b[0])).map(([t, d, l]) => `<dt>${esc(t)}</dt><dd>${esc(d)} ${l ? `<a href="#/learn/${l}">Guide →</a>` : ''}</dd>`).join('')}</dl></div></div>`;
 }
 export async function viewLesson(id) {
-  const club = CLASS_LESSONS.find(l => l.id === id), basic = LESSONS.find(l => l.id === id);
-  if (!club && !basic) { location.hash = '#/lessons'; return; }
-  const list = club ? CLASS_LESSONS : LESSONS, i = list.indexOf(club || basic), next = list[i + 1], prev = list[i - 1];
-  if (basic) {
-    app().innerHTML = `<div class="view lesson"><a href="#/lessons" class="small">‹ Lessons</a><div class="muted small" style="margin-top:12px">${esc(basic.group)} · ${basic.mins} min</div><h1>${esc(basic.title)}</h1>
-      <div class="card prose">${basic.body.map(p => `<p>${esc(p)}</p>`).join('')}</div>
-      <div class="row" style="margin-top:16px">${prev ? `<a class="btn secondary" href="#/lessons/${prev.id}">‹ ${esc(prev.title)}</a>` : ''}<span class="spacer"></span>${next ? `<a class="btn" href="#/lessons/${next.id}">${esc(next.title)} ›</a>` : '<a class="btn" href="#/lessons">All lessons</a>'}</div></div>`;
-    if (!isRead(id)) { const r = await api('/api/learn/' + id, { method: 'POST' }).catch(() => null); if (r) { state.me.lessonsRead = r.read; checkBadges(); } }
-    return;
-  }
-  const L = club, saved = state.me.quizScores?.[id];
-  app().innerHTML = `<div class="view lesson"><a href="#/lessons" class="small">‹ Lessons</a>
-    <div class="row" style="margin-top:12px"><span class="badge">Week ${L.week}</span>${L.date ? `<span class="muted small">${new Date(L.date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}</span>` : ''}<span class="muted small">· ${L.mins} min read</span></div>
-    <h1>${esc(L.title)}</h1><p class="lede">${esc(L.summary)}</p>
-    <nav class="toc card"><b>In this lesson</b>${L.sections.filter(s => s.h).map((s, k) => `<a href="#" data-to="s${k}">${esc(s.h)}</a>`).join('')}<a href="#" data-to="terms">Key terms</a><a href="#" data-to="quiz">Quiz</a></nav>
-    <article class="card prose">${L.sections.map((s, k) => `<section id="${s.h ? 's' + L.sections.filter(x => x.h).indexOf(s) : ''}">${sectionHtml(s)}</section>`).join('')}
-      ${L.source ? `<p class="muted small" style="margin-top:24px">${esc(L.source)}</p>` : ''}</article>
-    <div class="card" id="terms" style="margin-top:var(--gap)"><h2 style="margin-bottom:10px">Key terms</h2><dl class="glossary">${L.keyTerms.map(([t, d]) => `<dt>${esc(t)}</dt><dd>${esc(d)}</dd>`).join('')}</dl></div>
-    <div class="card" id="quiz" style="margin-top:var(--gap)"><div class="card-head"><h2>Check your understanding</h2>${saved ? `<span class="badge live">Best: ${saved.score}/${saved.total}</span>` : ''}</div><div id="qz"></div></div>
-    ${L.tryIt?.length ? `<div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:10px">Try it in Bullpen</h2><div class="try">${L.tryIt.map(([t, d, href]) => `<a href="${href}" class="try-item"><b>${esc(t)}</b><span class="muted small">${esc(d)}</span></a>`).join('')}</div></div>` : ''}
-    ${L.discuss?.length ? `<div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:8px">Think about it</h2><ul class="discuss">${L.discuss.map(d => `<li>${esc(d)}</li>`).join('')}</ul></div>` : ''}
-    <div class="row" style="margin-top:16px">${prev ? `<a class="btn secondary" href="#/lessons/${prev.id}">‹ Week ${prev.week}</a>` : ''}<span class="spacer"></span>${next ? `<a class="btn" href="#/lessons/${next.id}">Week ${next.week} ›</a>` : ''}</div></div>`;
-  $$('.toc a').forEach(a => a.onclick = e => { e.preventDefault(); document.getElementById(a.dataset.to)?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); });
-  // Quiz: one question at a time, explanation after each answer.
-  let k = 0, score = 0;
-  const qz = $('#qz');
-  const ask = () => {
-    if (k >= L.quiz.length) {
-      qz.innerHTML = `<div class="quiz-done"><div class="big">${score}/${L.quiz.length}</div><p>${score === L.quiz.length ? 'Perfect score!' : score >= L.quiz.length * 0.6 ? 'Nice work.' : 'Worth another read. Try again any time.'}</p><button class="btn secondary" id="again">Retake quiz</button></div>`;
-      $('#again').onclick = () => { k = 0; score = 0; ask(); };
-      api('/api/quiz/' + id, { method: 'POST', body: { score, total: L.quiz.length } }).then(r => { state.me.quizScores = r.scores; state.me.lessonsRead = r.read; checkBadges(); }).catch(() => {});
-      return;
-    }
-    const Q = L.quiz[k];
-    qz.innerHTML = `<div class="muted small">Question ${k + 1} of ${L.quiz.length}</div><p class="quiz-q">${esc(Q.q)}</p><div class="quiz-opts">${Q.options.map((o, n) => `<button class="quiz-opt" data-n="${n}">${esc(o)}</button>`).join('')}</div><div id="why"></div>`;
-    $$('.quiz-opt', qz).forEach(b => b.onclick = () => {
-      const n = +b.dataset.n, right = n === Q.answer; if (right) score++;
-      $$('.quiz-opt', qz).forEach(x => { x.disabled = true; x.classList.toggle('right', +x.dataset.n === Q.answer); x.classList.toggle('wrong', x === b && !right); });
-      $('#why', qz).innerHTML = `<p class="${right ? 'up' : 'down'}" style="font-weight:600;margin:12px 0 4px">${right ? 'Correct.' : 'Not quite.'}</p><p class="muted" style="margin:0 0 12px">${esc(Q.why)}</p><button class="btn" id="nextQ">${k + 1 < L.quiz.length ? 'Next question' : 'See score'}</button>`;
-      $('#nextQ').onclick = () => { k++; ask(); };
-    });
-  };
-  ask();
+  const L = LESSONS.find(l => l.id === id);
+  if (!L) { location.hash = '#/learn'; return; }
+  const i = LESSONS.indexOf(L), next = LESSONS[i + 1], prev = LESSONS[i - 1];
+  app().innerHTML = `<div class="view lesson"><a href="#/learn" class="small">‹ Learn</a><div class="muted small" style="margin-top:12px">${esc(L.group)} · ${L.mins} min</div><h1>${esc(L.title)}</h1>
+    <div class="card prose">${L.body.map(p => `<p>${esc(p)}</p>`).join('')}</div>
+    <div class="row" style="margin-top:16px">${prev ? `<a class="btn secondary" href="#/learn/${prev.id}">‹ ${esc(prev.title)}</a>` : ''}<span class="spacer"></span>${next ? `<a class="btn" href="#/learn/${next.id}">${esc(next.title)} ›</a>` : '<a class="btn" href="#/learn">All guides</a>'}</div></div>`;
+  if (!isRead(id)) { const r = await api('/api/learn/' + id, { method: 'POST' }).catch(() => null); if (r) { state.me.lessonsRead = r.read; checkBadges(); } }
 }
 
 // ---------- option strategy builder ----------
@@ -518,8 +453,8 @@ export function renderAnalytics(pane, pf, g) {
 }
 
 // ---------- keyboard shortcuts ----------
-const SHORTCUTS = [['/', 'Search symbols'], ['g then d', 'Dashboard'], ['g then p', 'Portfolio'], ['g then t', 'Trade'], ['g then r', 'Research'], ['g then s', 'Screener'], ['g then w', 'Watchlist'], ['g then g', 'Games'], ['g then b', 'Leaderboard'], ['g then f', 'Friends'], ['g then l', 'Lessons'], ['b / s', 'Buy / sell the symbol you’re viewing'], ['o', 'Options for the symbol you’re viewing'], ['a', 'Set a price alert'], ['n', 'Notifications'], ['[', 'Open or close the sidebar'], ['?', 'Show this list']];
-const GO = { d: '#/', p: '#/portfolio', t: '#/trade', r: '#/research', s: '#/screener', w: '#/watchlist', g: '#/games', b: '#/leaderboard', f: '#/friends', l: '#/lessons' };
+const SHORTCUTS = [['/', 'Search symbols'], ['g then d', 'Dashboard'], ['g then p', 'Portfolio'], ['g then t', 'Trade'], ['g then r', 'Research'], ['g then s', 'Screener'], ['g then w', 'Watchlist'], ['g then g', 'Games'], ['g then b', 'Leaderboard'], ['g then f', 'Friends'], ['g then l', 'Learn'], ['b / s', 'Buy / sell the symbol you’re viewing'], ['o', 'Options for the symbol you’re viewing'], ['a', 'Set a price alert'], ['n', 'Notifications'], ['[', 'Open or close the sidebar'], ['?', 'Show this list']];
+const GO = { d: '#/', p: '#/portfolio', t: '#/trade', r: '#/research', s: '#/screener', w: '#/watchlist', g: '#/games', b: '#/leaderboard', f: '#/friends', l: '#/learn' };
 export function mountShortcuts() {
   let pendingG = 0;
   document.addEventListener('keydown', e => {

@@ -259,7 +259,7 @@ async function viewDashboard() {
     <div class="page-head"><div><div class="muted small">${esc(g.settings.name)}</div><h1>Dashboard</h1></div><span id="mkt"></span></div>
     <div class="ticker" id="indices">${'<div class="card"><div class="skeleton"></div></div>'.repeat(5)}</div>
     <div class="grid g2">
-      <div class="card"><div class="stat"><div class="label">Account value</div></div><div class="big" id="acct">—</div><div id="acctChg" style="margin:6px 0 14px"></div><div id="perf"></div><div class="chart-tip" id="perfTip"></div>
+      <div class="card"><div class="stat"><div class="label">Account value</div></div><div class="big" id="acct">—</div><div id="acctChg" style="margin:6px 0 14px"></div>${perfSeg('perfRange')}<div id="perf" style="margin-top:10px"></div><div class="chart-tip" id="perfTip"></div>
         <div class="grid g3" style="margin-top:14px" id="acctStats"></div></div>
       <div class="card"><div class="card-head"><h2>Watchlist</h2><a href="#/watchlist" class="small">Edit</a></div><div id="wl"></div></div>
     </div>
@@ -267,7 +267,7 @@ async function viewDashboard() {
       <div class="card"><div class="card-head"><h2>Top holdings</h2><a href="#/portfolio" class="small">See all</a></div><div id="top"></div></div>
       <div class="card"><div class="card-head"><h2>Market movers</h2><span class="muted small">Large caps</span></div><div id="movers"></div></div>
     </div>
-    <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Market news</h2><a href="#/lessons" class="small">New to this? Start with the lessons</a></div><div id="news"></div></div></div>`;
+    <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Market news</h2><a href="#/learn" class="small">New to this? Read the guides</a></div><div id="news"></div></div></div>`;
   F.renderNews($('#news'), '', 6);
   F.checkBadges();
   const load = async () => {
@@ -278,15 +278,32 @@ async function viewDashboard() {
     $('#acct').textContent = money(pf.equity, { full: true });
     $('#acctChg').innerHTML = `${chip(pf.totalGain, `${signed(pf.totalGain)} (${pct(pf.totalGainPct)})`)} <span class="muted small">all time</span>${prefs().showDayChange !== false ? ` &nbsp;${chip(pf.dayChange, signed(pf.dayChange))} <span class="muted small">today</span>` : ''}`;
     $('#acctStats').innerHTML = [['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Holdings', pf.longValue - pf.shortValue]].map(([l, v]) => `<div class="stat"><div class="label">${l}</div><div class="value">${money(v)}</div></div>`).join('');
-    const snaps = Object.entries(pf.snapshots).sort().map(([d, v]) => [new Date(d + 'T16:00:00').getTime(), v]);
-    snaps.unshift([new Date(g.created || Date.now()).getTime() - 864e5, g.settings.startingCash]);
-    lineChart($('#perf'), snaps, { tip: $('#perfTip'), baseline: g.settings.startingCash });
+    const drawPerf = () => { const sn = perfSnaps(pf, g); lineChart($('#perf'), sn, { tip: $('#perfTip'), baseline: sn[0][1] }); };
+    drawPerf(); bindPerf('perfRange', drawPerf);
     $('#wl').innerHTML = quoteList(wl.symbols.map(s => wl.quotes[s]).filter(Boolean));
     $('#movers').innerHTML = quoteList(Object.values(m.movers).sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)).slice(0, 6));
     const top = [...pf.holdings].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5);
     $('#top').innerHTML = top.length ? quoteList(top.map(h => ({ symbol: h.symbol, name: `${F.qtyFmt(h.qty)} ${h.type === 'CRYPTO' ? 'coins' : 'shares'} · ${money(h.value)}`, price: h.price, changePct: h.gainPct }))) : `<div class="empty">No holdings yet.<br><a href="#/trade" class="btn sm" style="margin-top:12px">Make your first trade</a></div>`;
   };
   await load(); every(20000, () => load().catch(() => {}));
+}
+// Account value over a chosen range (snapshots are daily).
+const PERF_RANGES = [['1W', 7], ['1M', 30], ['3M', 91], ['YTD', 'ytd'], ['1Y', 365], ['All', 0]];
+let perfRange = (() => { try { return localStorage.getItem('bp_perf') || 'All'; } catch { return 'All'; } })();
+function perfSnaps(pf, g) {
+  const snaps = Object.entries(pf.snapshots).sort().map(([d, v]) => [new Date(d + 'T16:00:00').getTime(), v]);
+  snaps.unshift([(g.created || Date.now()) - 864e5, g.settings.startingCash]);
+  const span = PERF_RANGES.find(x => x[0] === perfRange)?.[1];
+  const from = span === 'ytd' ? new Date(new Date().getFullYear(), 0, 1).getTime() : span ? Date.now() - span * 864e5 : 0;
+  const cut = snaps.filter(p => p[0] >= from);
+  return cut.length >= 2 ? cut : snaps.slice(-2);
+}
+const perfSeg = id => `<div class="seg seg-sm" id="${id}" role="group" aria-label="Chart range">${PERF_RANGES.map(([k]) => `<button type="button" data-r="${k}" class="${k === perfRange ? 'on' : ''}">${k}</button>`).join('')}</div>`;
+function bindPerf(id, draw) {
+  $$(`#${id} button`).forEach(b => b.onclick = () => {
+    perfRange = b.dataset.r; try { localStorage.setItem('bp_perf', perfRange); } catch {}
+    $$(`#${id} button`).forEach(x => x.classList.toggle('on', x === b)); draw();
+  });
 }
 function quoteList(qs) {
   if (!qs.length) return '<div class="empty">Nothing here yet.</div>';
@@ -303,7 +320,7 @@ async function viewPortfolio(q) {
   app.innerHTML = `<div class="view">
     <div class="page-head"><div><div class="muted small">${esc(pf.game.settings.name)}</div><h1>${own ? 'Portfolio' : esc(pf.owner) + '’s portfolio'}</h1></div>
       ${own ? `<div class="row">${pf.game.settings.allowReset ? '<button class="btn secondary sm" id="reset">Reset portfolio</button>' : ''}<a class="btn" href="#/trade">Trade</a></div>` : ''}</div>
-    <div class="grid g4">${[['Account value', money(pf.equity)], ['Today', `<span class="${cls(pf.dayChange)}">${signed(pf.dayChange)}</span>`], ['Total return', `<span class="${cls(pf.totalGain)}">${signed(pf.totalGain)} <span class="small">${pct(pf.totalGainPct)}</span></span>`], ['Buying power', money(pf.buyingPower)], ['Cash', money(pf.cash)], ['Long value', money(pf.longValue)], ['Short value', money(pf.shortValue)], ['Positions', pf.holdings.length + (pf.options || []).length]].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
+    <div class="grid g4">${[['Account value', money(pf.equity)], ['Today', `<span class="${cls(pf.dayChange)}">${signed(pf.dayChange)}</span>`], ['Total return', `<span class="${cls(pf.totalGain)}">${signed(pf.totalGain)} <span class="small">${pct(pf.totalGainPct)}</span></span>`], ['Buying power', money(pf.buyingPower)], ['Cash', money(pf.cash)], ['Long value', money(pf.longValue)], ['Short value', money(pf.shortValue)], ['Positions', pf.holdings.length + (pf.options || []).length], ...(pf.unsettled > 0.005 ? [['Unsettled cash', `${money(pf.unsettled)} <span class="small muted">usable next trading day</span>`]] : [])].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
     <div class="card" style="margin-top:var(--gap)">
       <div class="card-head"><div class="seg">${['holdings', ...(own ? ['orders'] : []), 'history', 'performance', 'analytics'].map(t => `<button data-t="${t}" class="${t === tab ? 'on' : ''}">${{ holdings: 'Holdings', orders: `Open orders (${pf.orders.length})`, history: 'Trade history', performance: 'Performance', analytics: 'Analytics' }[t]}</button>`).join('')}</div></div>
       <div id="pane"></div></div></div>`;
@@ -324,7 +341,7 @@ async function viewPortfolio(q) {
   }
   if (tab === 'orders') {
     pane.innerHTML = pf.orders.length ? `${pf.marketOpen ? '' : '<p class="muted small">The market is closed. Market orders will fill at the next open.</p>'}<div class="table-wrap"><table><thead><tr><th>Placed</th><th>Symbol</th><th>Action</th><th class="r">Qty</th><th>Type</th><th>Duration</th><th></th></tr></thead><tbody>
-      ${pf.orders.map(o => `<tr><td>${when(o.created)}</td>${tradeCells(o)}<td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td>${o.duration === 'gtc' ? 'Good ’til cancelled' : 'Day'}</td><td class="r"><button class="btn sm danger" data-cancel="${o.id}">Cancel</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No open orders.</div>';
+      ${pf.orders.map(o => `<tr><td>${when(o.created)}</td>${tradeCells(o)}<td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td>${o.duration === 'gtc' ? 'Good ’til cancelled' : 'Day'}${o.notBefore > Date.now() ? `<div class="muted small">Executes after ${new Date(o.notBefore).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>` : ''}</td><td class="r"><button class="btn sm danger" data-cancel="${o.id}">Cancel</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No open orders.</div>';
     $$('[data-cancel]', pane).forEach(b => b.onclick = async () => { await api(`/api/games/${g.id}/orders/${b.dataset.cancel}`, { method: 'DELETE' }); toast('Order cancelled.'); route(); });
   }
   if (tab === 'history') {
@@ -333,10 +350,9 @@ async function viewPortfolio(q) {
   }
   if (tab === 'analytics') F.renderAnalytics(pane, pf, g);
   if (tab === 'performance') {
-    pane.innerHTML = '<div id="pchart"></div><div class="chart-tip" id="ptip"></div>';
-    const snaps = Object.entries(pf.snapshots).sort().map(([d, v]) => [new Date(d + 'T16:00:00').getTime(), v]);
-    snaps.unshift([(g.created || Date.now()) - 864e5, g.settings.startingCash]);
-    lineChart($('#pchart'), snaps, { tip: $('#ptip'), baseline: g.settings.startingCash, tall: true });
+    pane.innerHTML = `${perfSeg('pRange')}<div id="pchart" style="margin-top:10px"></div><div class="chart-tip" id="ptip"></div>`;
+    const drawP = () => { const sn = perfSnaps(pf, g); lineChart($('#pchart'), sn, { tip: $('#ptip'), baseline: sn[0][1], tall: true }); };
+    drawP(); bindPerf('pRange', drawP);
   }
 }
 const ACTION_LABEL = { buy: 'Buy', sell: 'Sell', short: 'Short', cover: 'Cover', bto: 'Buy to open', stc: 'Sell to close', sto: 'Sell to open', btc: 'Buy to close' };
@@ -402,7 +418,7 @@ async function viewTrade(q) {
     const submit = async close => {
       try { const r = await api(`/api/games/${g.id}/orders`, { method: 'POST', body: o }); close?.();
         F.checkBadges();
-        toast(r.filled ? `${o.action[0].toUpperCase() + o.action.slice(1)} ${F.qtyFmt(o.qty)} ${o.symbol} filled at ${money(r.order.fillPrice, { full: true })}` : r.marketOpen ? 'Order placed. It will fill when its price is reached.' : 'Order placed. It will fill when the market opens.');
+        toast(r.filled ? `${o.action[0].toUpperCase() + o.action.slice(1)} ${F.qtyFmt(o.qty)} ${o.symbol} filled at ${money(r.order.fillPrice, { full: true })}` : r.delayed ? `Order placed. It executes in about ${activeGame().settings.executionDelay} min at the market price then.` : r.marketOpen ? 'Order placed. It will fill when its price is reached.' : 'Order placed. It will fill when the market opens.');
         location.hash = r.filled ? '#/portfolio' : '#/portfolio?tab=orders';
       } catch (err) { toast(err.message, true); }
     };
@@ -422,7 +438,7 @@ async function viewTrade(q) {
   setAct(actions.includes(f.action) ? f.action : 'buy');
   pf = await api(`/api/games/${g.id}/portfolio`);
   $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l} ${l === 'Buying power' ? F.tip('buyingPower') : l === 'Account value' ? F.tip('equity') : ''}</div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length + (pf.options || []).length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
-  $('#rules').innerHTML = `<h3 style="color:var(--ink);margin-bottom:6px">Game rules</h3>Commission: ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) + ' per trade' : s.commission + '% of trade') : 'none'}<br>Short selling: ${s.allowShort ? `on (min ${money(s.minShortPrice)})` : 'off'}<br>Margin: ${s.allowMargin ? `on (${s.marginInterest}% interest)` : 'off'}<br>${s.minStockPrice ? `Min. stock price: ${money(s.minStockPrice)}<br>` : ''}${s.maxPositionPct < 100 ? `Max position: ${s.maxPositionPct}% of portfolio<br>` : ''}${s.dailyTradeLimit ? `Daily trade limit: ${s.dailyTradeLimit}<br>` : ''}ETFs: ${s.allowEtf ? 'allowed' : 'not allowed'}<br>Options: ${s.allowOptions ? (s.allowOptionWriting ? 'buy and write' : 'buy only') : 'off'}`;
+  $('#rules').innerHTML = `<h3 style="color:var(--ink);margin-bottom:6px">Game rules</h3>Commission: ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) + ' per trade' : s.commission + '% of trade') : 'none'}<br>Short selling: ${s.allowShort ? `on (min ${money(s.minShortPrice)})` : 'off'}<br>Margin: ${s.allowMargin ? `on (${s.marginInterest}% interest)` : 'off'}<br>${s.minStockPrice ? `Min. stock price: ${money(s.minStockPrice)}<br>` : ''}${s.maxPositionPct < 100 ? `Max position: ${s.maxPositionPct}% of portfolio<br>` : ''}${s.dailyTradeLimit ? `Daily trade limit: ${s.dailyTradeLimit}<br>` : ''}ETFs: ${s.allowEtf ? 'allowed' : 'not allowed'}<br>Options: ${s.allowOptions ? (s.allowOptionWriting ? 'buy and write' : 'buy only') : 'off'}${s.executionDelay ? `<br>Execution delay: ${s.executionDelay} min on ${s.delayApplies === 'all' ? 'every order' : 'sells'}` : ''}${s.settleT1 ? '<br>Sale proceeds settle next trading day' : ''}`;
   if (f.symbol) loadQuote(f.symbol); else form.symbol.focus();
 }
 
@@ -508,7 +524,7 @@ async function viewTradeOptions(q) {
     const submit = async close => {
       try { const r = await api(`/api/games/${g.id}/orders`, { method: 'POST', body: o }); close?.();
         F.checkBadges();
-        toast(r.filled ? `${ACTION_LABEL[o.action]} ${o.qty} × ${c.desc} filled at ${money(r.order.fillPrice, { full: true })}` : r.marketOpen ? 'Order placed. It fills when its price is reached.' : 'Order placed. It fills when the market opens.');
+        toast(r.filled ? `${ACTION_LABEL[o.action]} ${o.qty} × ${c.desc} filled at ${money(r.order.fillPrice, { full: true })}` : r.delayed ? `Order placed. It executes in about ${activeGame().settings.executionDelay} min at the market price then.` : r.marketOpen ? 'Order placed. It fills when its price is reached.' : 'Order placed. It fills when the market opens.');
         location.hash = r.filled ? '#/portfolio' : '#/portfolio?tab=orders';
       } catch (err) { toast(err.message, true); }
     };
@@ -544,6 +560,11 @@ async function viewResearch(q) {
         <button class="btn secondary sm" id="watch">${watching ? '★ Watching' : '☆ Watch'}</button></div>
       <div class="big" style="margin-top:14px" id="px">${money(qt.price, { full: true })}</div>
       <div id="pxc" class="${cls(qt.change)}" style="font-weight:600;margin-bottom:14px">${signed(qt.change)} (${pct(qt.changePct)}) today</div>
+      <div class="chart-controls">
+        <div class="seg seg-sm" id="rng" role="group" aria-label="Chart range">${TV_RANGES.map(([k]) => `<button type="button" data-r="${k}">${k}</button>`).join('')}</div>
+        <label><span class="sr">Candle size</span><select id="ivl">${TV_INTERVALS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
+        <label><span class="sr">Chart type</span><select id="cstyle">${TV_STYLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
+      </div>
       <div id="chart" class="tv"></div></div>
     <div class="stack"><div class="card"><h3 style="margin-bottom:8px">Key stats</h3><table><tbody>
       ${[['Previous close', money(qt.prevClose, { full: true })], ['Open', money(qt.open, { full: true })], ...(qt.industry && qt.type === 'EQUITY' ? [['Sector', esc(qt.industry)]] : []), ...(qt.marketCap ? [['Market cap', qt.marketCap >= 1e6 ? '$' + (qt.marketCap / 1e6).toFixed(2) + 'T' : '$' + (qt.marketCap / 1e3).toFixed(1) + 'B']] : []), ...(qt.type === 'EQUITY' ? [['Next earnings', '<span id="earn">…</span>']] : []), ['Day range', `${money(qt.low, { full: true })} – ${money(qt.high, { full: true })}`], ['Type', { ETF: 'Fund', CRYPTO: 'Crypto (trades 24/7)' }[qt.type] || 'Stock'], ['Last update', when(qt.time)]].map(([k, v]) => `<tr><td class="muted">${k}</td><td class="r">${v}</td></tr>`).join('')}</tbody></table></div>
@@ -557,18 +578,33 @@ async function viewResearch(q) {
     const list = watching ? wl.symbols.filter(s => s !== sym) : [...wl.symbols, sym];
     await api('/api/watchlist', { method: 'PUT', body: { symbols: list } }); toast(watching ? 'Removed from watchlist.' : 'Added to watchlist.'); route();
   };
-  tradingViewChart($('#chart'), sym);
+  // Chart range, candle size and type; the last choice is remembered.
+  let cv; try { cv = JSON.parse(localStorage.getItem('bp_chart')) || {}; } catch { cv = {}; }
+  cv = { range: TV_RANGES.some(r => r[0] === cv.range) ? cv.range : (TV_RANGES.some(r => r[0] === prefs().defaultRange) ? prefs().defaultRange : '1D'), interval: cv.interval || 'auto', style: cv.style || '3' };
+  const drawChart = () => {
+    $$('#rng button').forEach(b => b.classList.toggle('on', b.dataset.r === cv.range));
+    $('#ivl').value = cv.interval; $('#cstyle').value = cv.style;
+    try { localStorage.setItem('bp_chart', JSON.stringify(cv)); } catch {}
+    tradingViewChart($('#chart'), sym, cv);
+  };
+  $$('#rng button').forEach(b => b.onclick = () => { cv.range = b.dataset.r; cv.interval = 'auto'; drawChart(); });
+  $('#ivl').onchange = e => { cv.interval = e.target.value; drawChart(); };
+  $('#cstyle').onchange = e => { cv.style = e.target.value; drawChart(); };
+  drawChart();
   every(15000, async () => { const r = await api('/api/quote?symbols=' + encodeURIComponent(sym)).catch(() => null); const n = r?.[sym]; if (!n || !$('#px')) return; $('#px').textContent = money(n.price, { full: true }); $('#pxc').className = cls(n.change); $('#pxc').textContent = `${signed(n.change)} (${pct(n.changePct)}) today`; });
 }
 
 // Interactive chart from TradingView's free embeddable widget (no key; draws its own data).
-function tradingViewChart(host, sym) {
+const TV_RANGES = [['1D', '1D', '5'], ['5D', '5D', '30'], ['1M', '1M', '60'], ['3M', '3M', 'D'], ['6M', '6M', 'D'], ['YTD', 'YTD', 'D'], ['1Y', '12M', 'D'], ['5Y', '60M', 'W'], ['All', 'ALL', 'M']];
+const TV_INTERVALS = [['auto', 'Auto candles'], ['1', '1 minute'], ['5', '5 minutes'], ['15', '15 minutes'], ['30', '30 minutes'], ['60', '1 hour'], ['240', '4 hours'], ['D', '1 day'], ['W', '1 week'], ['M', '1 month']];
+const TV_STYLES = [['3', 'Area'], ['2', 'Line'], ['1', 'Candles'], ['0', 'Bars'], ['9', 'Hollow candles']];
+function tradingViewChart(host, sym, { range = '1D', interval = 'auto', style = '3' } = {}) {
   const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
-  const range = { '1D': '1D', '5D': '5D', '1M': '1M', '6M': '6M', YTD: 'YTD', '1Y': '12M', '5Y': '60M' }[prefs().defaultRange] || '1D';
+  const [, tvRange, autoInterval] = TV_RANGES.find(r => r[0] === range) || TV_RANGES[0];
   host.innerHTML = '<div class="tradingview-widget-container" style="height:100%"><div class="tradingview-widget-container__widget" style="height:100%"></div></div>';
   const s = document.createElement('script');
   s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; s.async = true;
-  s.textContent = JSON.stringify({ symbol: tvSymbol(sym), range, interval: range === '1D' ? '5' : 'D', theme: dark ? 'dark' : 'light', style: '3', locale: 'en', autosize: true, hide_side_toolbar: true, allow_symbol_change: false, save_image: false, backgroundColor: dark ? 'rgba(28,28,30,1)' : 'rgba(255,255,255,1)', gridColor: 'rgba(128,128,128,0.08)', support_host: 'https://www.tradingview.com' });
+  s.textContent = JSON.stringify({ symbol: tvSymbol(sym), range: tvRange, interval: interval === 'auto' ? autoInterval : interval, theme: dark ? 'dark' : 'light', style, locale: 'en', autosize: true, hide_side_toolbar: true, allow_symbol_change: false, save_image: false, backgroundColor: dark ? 'rgba(28,28,30,1)' : 'rgba(255,255,255,1)', gridColor: 'rgba(128,128,128,0.08)', support_host: 'https://www.tradingview.com' });
   $('.tradingview-widget-container', host).append(s);
 }
 
@@ -611,6 +647,9 @@ const SETTING_GROUPS = [
     ['allowEtf', 'Allow ETFs', 'bool'], ['allowMutualFunds', 'Allow mutual funds', 'bool'],
     ['minStockPrice', 'Minimum price to buy ($)', 'number', null, 'Blocks penny stocks below this price.'],
     ['maxPositionPct', 'Max single position (% of portfolio)', 'number', null, '100 = no diversification rule.'],
+    ['executionDelay', 'Order execution delay', 'select', [['0', 'None: fill instantly'], ['1', '1 minute'], ['2', '2 minutes'], ['5', '5 minutes'], ['10', '10 minutes'], ['15', '15 minutes']], 'Orders wait this long, then fill at the market price at that moment. More realistic, and stops instant flips.'],
+    ['delayApplies', 'Delay applies to', 'select', [['sells', 'Selling only (sell, short, sell options)'], ['all', 'Every order']]],
+    ['settleT1', 'Next-day settlement (T+1)', 'bool', null, 'Money from a sale can’t be used to buy again until the next trading day, like a real cash account.'],
     ['allowCrypto', 'Allow crypto', 'bool', null, 'Bitcoin, Ethereum and more. Trades 24/7 in fractional amounts.'],
     ['payDividends', 'Pay dividends', 'bool', null, 'Credits each stock’s real dividend yield daily. Shorts pay it.'],
     ['dailyTradeLimit', 'Daily trade limit', 'number', null, '0 = unlimited.'],
@@ -631,10 +670,10 @@ function settingsForm(s, sandbox) {
   return SETTING_GROUPS.map(([title, fields]) => `<div class="card"><h3 style="margin-bottom:12px">${title}</h3>
     ${fields.filter(([k]) => !(sandbox && ['privacy', 'password', 'allowLateEntry', 'showPortfolios', 'startDate', 'endDate'].includes(k))).map(([k, label, type, opts, hint]) => type === 'bool'
       ? `<label class="switch"><div><div class="t">${label}</div>${hint ? `<div class="d">${hint}</div>` : ''}</div><input type="checkbox" name="${k}" ${s[k] ? 'checked' : ''}></label>`
-      : `<label class="field" style="margin-bottom:12px"><span>${label}</span>${type === 'select' ? `<select name="${k}">${opts.map(([v, t]) => `<option value="${v}" ${s[k] === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` : type === 'textarea' ? `<textarea name="${k}" rows="2">${esc(s[k])}</textarea>` : `<input name="${k}" type="${type}" value="${esc(s[k])}" ${type === 'number' ? 'step="any" min="0"' : ''}>`}${hint ? `<div class="hint">${hint}</div>` : ''}</label>`).join('')}</div>`).join('');
+      : `<label class="field" style="margin-bottom:12px"><span>${label}</span>${type === 'select' ? `<select name="${k}">${opts.map(([v, t]) => `<option value="${v}" ${String(s[k]) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` : type === 'textarea' ? `<textarea name="${k}" rows="2">${esc(s[k])}</textarea>` : `<input name="${k}" type="${type}" value="${esc(s[k])}" ${type === 'number' ? 'step="any" min="0"' : ''}>`}${hint ? `<div class="hint">${hint}</div>` : ''}</label>`).join('')}</div>`).join('');
 }
 const readForm = form => Object.fromEntries([...form.elements].filter(e => e.name).map(e => [e.name, e.type === 'checkbox' ? e.checked : e.type === 'number' ? +e.value : e.value]));
-const DEFAULTS = { name: '', description: '', privacy: 'public', password: '', startDate: new Date().toLocaleDateString('en-CA'), endDate: '', startingCash: 100000, commissionType: 'flat', commission: 0, cashInterest: 0, allowMargin: false, marginInterest: 8, allowShort: true, minShortPrice: 5, allowLimit: true, allowStop: true, allowTrailing: true, allowEtf: true, allowMutualFunds: false, minStockPrice: 0, maxPositionPct: 100, dailyTradeLimit: 0, allowLateEntry: true, allowReset: true, showPortfolios: true, allowOptions: true, allowOptionWriting: false, optionCommission: 0, allowCrypto: true, payDividends: true, maxPlayers: 0 };
+const DEFAULTS = { name: '', description: '', privacy: 'public', password: '', startDate: new Date().toLocaleDateString('en-CA'), endDate: '', startingCash: 100000, commissionType: 'flat', commission: 0, cashInterest: 0, allowMargin: false, marginInterest: 8, allowShort: true, minShortPrice: 5, allowLimit: true, allowStop: true, allowTrailing: true, allowEtf: true, allowMutualFunds: false, minStockPrice: 0, maxPositionPct: 100, dailyTradeLimit: 0, allowLateEntry: true, allowReset: true, showPortfolios: true, allowOptions: true, allowOptionWriting: false, optionCommission: 0, allowCrypto: true, payDividends: true, maxPlayers: 0, executionDelay: 0, delayApplies: 'sells', settleT1: false };
 
 async function viewGames() {
   await loadGames();
@@ -709,7 +748,7 @@ function viewSettings() {
       ${sw('confirmTrades', 'Confirm before placing orders', 'Show a review sheet before each trade.')}
       ${sw('showDayChange', 'Show today’s change', 'Display daily gain/loss on the dashboard.')}
       ${sw('compactNumbers', 'Compact numbers', 'Show $1.2M instead of $1,200,000.00.', false)}
-      <label class="field" style="margin-top:12px"><span>Default chart range</span><select data-k="defaultRange">${['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y'].map(r => `<option ${p.defaultRange === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+      <label class="field" style="margin-top:12px"><span>Default chart range</span><select data-k="defaultRange">${['1D', '5D', '1M', '3M', '6M', 'YTD', '1Y', '5Y', 'All'].map(r => `<option ${p.defaultRange === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
       <label class="field" style="margin-top:12px"><span>Default game</span><select data-k="defaultGame"><option value="">Last used</option>${state.games.mine.map(g => `<option value="${g.id}" ${p.defaultGame === g.id ? 'selected' : ''}>${esc(g.settings.name)}</option>`).join('')}</select></label>
     </div>
     <div class="card stack" id="profileCard"><div class="card-head" style="margin:0"><h2>Profile</h2><a href="#/profile" class="small">View profile</a></div>
@@ -850,8 +889,8 @@ async function route() {
     else if (path === '/screener') await F.viewScreener();
     else if (path === '/leaderboard') await F.viewLeaderboard();
     else if (path === '/friends') await F.viewFriends();
-    else if (path === '/lessons') F.viewLessons();
-    else if (path.startsWith('/lessons/')) await F.viewLesson(path.split('/')[2]);
+    else if (path === '/learn') F.viewLessons();
+    else if (path.startsWith('/learn/')) await F.viewLesson(path.split('/')[2]);
     else if (path === '/profile') await viewProfile();
     else if (path.startsWith('/profile/')) await viewProfile(decodeURIComponent(path.split('/')[2]));
     else location.hash = '#/';

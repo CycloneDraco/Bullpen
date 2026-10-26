@@ -346,3 +346,16 @@ body.side-open .side { transform: none; visibility: visible; transition: transfo
   .gsearch input { font-size: 16px; }
 }
 @media (prefers-reduced-transparency: reduce) { .side { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+
+/* chart range controls */
+.chart-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.chart-controls select { width: auto; padding: 6px 28px 6px 10px; font-size: 14px; }
+.seg-sm button { padding: 5px 10px; font-size: .8rem; }
+@media (max-width: 760px) { .chart-controls select { font-size: 16px; } }
+
+/* Grid columns may shrink below their content; long tables scroll or wrap instead of widening the page. */
+.grid > * { min-width: 0; }
+.g2 { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); } .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } .g-half { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 900px) { .g2, .g3, .g-half { grid-template-columns: minmax(0, 1fr); } .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.card > table td { white-space: normal; }
+.card > .row h2, #body .muted.small { overflow-wrap: anywhere; }

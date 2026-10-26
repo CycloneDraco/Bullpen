@@ -36,8 +36,8 @@ Until you do this, the site runs in **offline mode**: you sign in with just a na
 - **Game settings:** start/end dates, starting cash, flat or % commission, interest on cash, margin and margin interest, short selling and a minimum short price, each order type on/off, ETFs, a minimum stock price, max position %, a daily trade limit, late entry, portfolio resets, portfolio visibility.
 - **Your settings:** theme, accent colour, gain/loss colours, density, compact numbers, trade confirmation, default chart range, default game.
 
-## Club lessons
-The **Lessons** tab has a write-up of every PMSS Financial Literacy and Investment Club meeting, so members who missed one can catch up: the explanation, key terms, a short quiz, discussion questions and things to try in Bullpen. Each week is one entry in [`class-lessons.js`](class-lessons.js); add new weeks to the end of the list. Below the club lessons are short trading-basics guides ([`learn.js`](learn.js)) that the ⓘ tooltips around the app link to.
+## Learn
+Short trading guides ([`learn.js`](learn.js)) and a glossary. The ⓘ tooltips around the app link to them.
 
 ## Also included
 Crypto (24/7, fractional), daily dividends, option strategies with payoff charts, price alerts and notifications, market and company news, earnings dates, a screener, a global leaderboard, friends with @usernames, game invites and head-to-head challenges, a game activity feed with comments, badges, portfolio analytics against the S&P 500, and keyboard shortcuts (press `?`).

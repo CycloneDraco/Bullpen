@@ -3,7 +3,6 @@
 import CONFIG from './config.js';
 import { store } from './store.js';
 import { LESSONS } from './learn.js';
-import { CLASS_LESSONS } from './class-lessons.js';
 export { store };
 
 const FH = CONFIG.finnhubBase || 'https://finnhub.io/api/v1';
@@ -184,6 +183,7 @@ const DEFAULT_SETTINGS = {
   allowEtf: true, allowMutualFunds: false,
   allowOptions: true, allowOptionWriting: false, optionCommission: 0,
   allowCrypto: true, payDividends: true, maxPlayers: 0,
+  executionDelay: 0, delayApplies: 'sells', settleT1: false,
 };
 function cleanSettings(input, base = DEFAULT_SETTINGS) {
   const s = { ...DEFAULT_SETTINGS, ...base };
@@ -194,6 +194,8 @@ function cleanSettings(input, base = DEFAULT_SETTINGS) {
   }
   if (!['public', 'private'].includes(s.privacy)) s.privacy = 'public';
   if (!['flat', 'percent'].includes(s.commissionType)) s.commissionType = 'flat';
+  if (!['sells', 'all'].includes(s.delayApplies)) s.delayApplies = 'sells';
+  s.executionDelay = Math.min(60, s.executionDelay);
   s.startingCash = Math.min(Math.max(s.startingCash, 1000), 100000000);
   return s;
 }
@@ -235,9 +237,20 @@ function valuation(p, quotes, optq = {}) {
   });
   return { holdings, options, longValue, shortValue, optCollateral, equity: p.cash + longValue - shortValue };
 }
+// Next-day settlement: money from a sale can't be reused until the next trading day.
+function nextTradingDay() {
+  const d = new Date(nyDate() + 'T12:00:00Z');
+  do d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return d.toISOString().slice(0, 10);
+}
+const unsettledCash = p => (p.unsettled || []).filter(u => u.date > nyDate()).reduce((a, u) => a + u.amount, 0);
+function settle(p, g, amount) { if (g.settings.settleT1 && amount > 0) (p.unsettled ||= []).push({ amount, date: nextTradingDay() }); }
+// Execution delay: orders wait a few minutes, then fill at whatever the price is by then.
+const SELL_SIDE = ['sell', 'stc', 'short', 'sto'];
+const delayFor = (g, o) => g.settings.executionDelay && (g.settings.delayApplies === 'all' || SELL_SIDE.includes(o.action)) ? g.settings.executionDelay * 60000 : 0;
 function buyingPower(p, g, v) {
   // Short proceeds sit in cash but are held as collateral; margin lends up to equity again.
-  return Math.max(0, p.cash - v.shortValue - (v.optCollateral || 0) + (g.settings.allowMargin ? v.equity : 0));
+  return Math.max(0, p.cash - v.shortValue - (v.optCollateral || 0) - unsettledCash(p) + (g.settings.allowMargin ? v.equity : 0));
 }
 const commissionFor = (g, amount) => g.settings.commissionType === 'flat' ? g.settings.commission : amount * g.settings.commission / 100;
 
@@ -280,7 +293,7 @@ function fill(p, g, o, price) {
   if (o.action === 'sell') o.realized = (price - pos.avg) * o.qty - fee;
   if (o.action === 'cover') o.realized = (pos.avg - price) * o.qty - fee;
   if (o.action === 'buy') { pos.avg = (pos.avg * pos.qty + amount) / (pos.qty + o.qty); pos.qty += o.qty; p.cash -= amount + fee; }
-  if (o.action === 'sell') { pos.qty -= o.qty; p.cash += amount - fee; }
+  if (o.action === 'sell') { pos.qty -= o.qty; p.cash += amount - fee; settle(p, g, amount - fee); }
   if (o.action === 'short') { pos.avg = (pos.avg * -pos.qty + amount) / (-pos.qty + o.qty); pos.qty -= o.qty; p.cash += amount - fee; }
   if (o.action === 'cover') { pos.qty += o.qty; p.cash -= amount + fee; }
   if (Math.abs(pos.qty) < 1e-9) delete p.positions[o.symbol]; else p.positions[o.symbol] = pos;
@@ -348,7 +361,7 @@ function fillOption(p, g, o, price) {
   const amount = o.qty * 100 * price, fee = optionFee(g, o.qty, amount);
   const pos = p.options[o.key] || { qty: 0, avg: 0 };
   if (o.action === 'bto') { pos.avg = (pos.avg * pos.qty + price * o.qty) / (pos.qty + o.qty); pos.qty += o.qty; p.cash -= amount + fee; }
-  if (o.action === 'stc') { o.realized = (price - pos.avg) * o.qty * 100 - fee; pos.qty -= o.qty; p.cash += amount - fee; }
+  if (o.action === 'stc') { o.realized = (price - pos.avg) * o.qty * 100 - fee; pos.qty -= o.qty; p.cash += amount - fee; settle(p, g, amount - fee); }
   if (o.action === 'sto') { pos.avg = (pos.avg * -pos.qty + price * o.qty) / (-pos.qty + o.qty); pos.qty -= o.qty; p.cash += amount - fee; }
   if (o.action === 'btc') { o.realized = (pos.avg - price) * o.qty * 100 - fee; pos.qty += o.qty; p.cash -= amount + fee; }
   if (pos.qty === 0) delete p.options[o.key]; else p.options[o.key] = pos;
@@ -398,6 +411,7 @@ async function processOrders(p, g) {
   for (const o of [...p.orders]) {
     if (o.duration === 'day' && o.day !== today && o.type !== 'market') { closeOrder(p, o, 'expired'); continue; }
     if (o.duration === 'gtc' && Date.now() - o.created > 90 * 864e5) { closeOrder(p, o, 'expired'); continue; }
+    if (o.notBefore && Date.now() < o.notBefore) continue;
     if (o.asset === 'option') {
       const oq = mk.optq[o.key]; if (!oq) continue;
       if (oq.expired) { closeOrder(p, o, 'expired'); continue; }
@@ -447,7 +461,7 @@ async function accrueDividends(p, g, quotes) {
 }
 
 async function portfolioView(p, g, own) {
-  if (own) { accrueInterest(p, g); await processOrders(p, g); }
+  if (own) { accrueInterest(p, g); await processOrders(p, g); p.unsettled = (p.unsettled || []).filter(u => u.date > nyDate()); }
   const mk = await marks([p, own ? { positions: { SPY: {} } } : {}]);
   if (own) await accrueDividends(p, g, mk.quotes);
   const v = valuation(p, mk.quotes, mk.optq);
@@ -461,7 +475,7 @@ async function portfolioView(p, g, own) {
     playerId: p.userId, gameId: g.id, cash: p.cash, ...v, buyingPower: buyingPower(p, g, v),
     totalGain: v.equity - start, totalGainPct: ((v.equity - start) / start) * 100,
     dayChange: v.holdings.reduce((a, h) => a + h.dayChange, 0),
-    orders: own ? p.orders : [], history: p.history.slice(0, 300), snapshots: p.snapshots, bench: p.bench || {}, divPaid: p.divPaid || 0, marketOpen: marketOpen(),
+    orders: own ? p.orders : [], history: p.history.slice(0, 300), snapshots: p.snapshots, bench: p.bench || {}, divPaid: p.divPaid || 0, unsettled: unsettledCash(p), marketOpen: marketOpen(),
   };
 }
 
@@ -663,7 +677,7 @@ route('POST', '/api/games/:gid/reset', async ({ user, params }) => {
   const g = await mustGame(params.gid), p = await store.getPlayer(g.id, user.id);
   if (!p) throw httpError(404, 'Not in game.');
   if (!g.settings.allowReset) throw httpError(403, 'Portfolio resets are disabled for this game.');
-  await store.savePlayer(g.id, user.id, { ...p, cash: g.settings.startingCash, positions: {}, options: {}, orders: [], history: [], snapshots: {}, tradesByDay: {} });
+  await store.savePlayer(g.id, user.id, { ...p, cash: g.settings.startingCash, positions: {}, options: {}, unsettled: [], orders: [], history: [], snapshots: {}, tradesByDay: {} });
   return { ok: true };
 });
 
@@ -693,10 +707,12 @@ route('POST', '/api/games/:gid/orders', async ({ user, params, body }) => {
   let q; try { q = await getQuote(o.symbol); } catch { throw httpError(400, `Couldn't find ${o.symbol}.`); }
   const mk = await marks([p]);
   const err = validateOrder(p, g, o, q, valuation(p, mk.quotes, mk.optq)); if (err) throw httpError(400, err);
+  const delay = delayFor(g, o);
+  if (delay) o.notBefore = Date.now() + delay;
   p.orders.push(o);
-  if (openFor(o.symbol) && shouldFill(o, q.price)) fill(p, g, o, fillPrice(o, q.price));
+  if (!delay && openFor(o.symbol) && shouldFill(o, q.price)) fill(p, g, o, fillPrice(o, q.price));
   await savePlayer(g, p);
-  return { order: o, filled: o.status === 'filled', marketOpen: openFor(o.symbol) };
+  return { order: o, filled: o.status === 'filled', delayed: !!delay, marketOpen: openFor(o.symbol) };
 });
 async function placeOptionOrder(g, p, user, body) {
   const c = parseKey(body.key);
@@ -709,10 +725,12 @@ async function placeOptionOrder(g, p, user, body) {
   const mk = await marks([p, { options: { [o.key]: {} } }]), oq = mk.optq[o.key];
   if (!oq) throw httpError(400, `Couldn't price ${o.desc}.`);
   const err = validateOptionOrder(p, g, o, oq, valuation(p, mk.quotes, mk.optq)); if (err) throw httpError(400, err);
+  const delay = delayFor(g, o);
+  if (delay) o.notBefore = Date.now() + delay;
   p.orders.push(o);
-  if (marketOpen() && shouldFillOption(o, oq)) fillOption(p, g, o, optionFillPrice(o, oq));
+  if (!delay && marketOpen() && shouldFillOption(o, oq)) fillOption(p, g, o, optionFillPrice(o, oq));
   await savePlayer(g, p);
-  return { order: o, filled: o.status === 'filled', marketOpen: marketOpen() };
+  return { order: o, filled: o.status === 'filled', delayed: !!delay, marketOpen: marketOpen() };
 }
 route('DELETE', '/api/games/:gid/orders/:oid', async ({ user, params }) => {
   const p = await store.getPlayer(params.gid, user.id); const o = p?.orders.find(o => o.id === params.oid);
@@ -900,18 +918,10 @@ route('POST', '/api/badges/check', async ({ user }) => {
   return fresh;
 });
 route('POST', '/api/learn/:id', async ({ user, params }) => {
-  if (![...LESSONS, ...CLASS_LESSONS].some(l => l.id === params.id)) throw httpError(404, 'Lesson not found.');
+  if (!LESSONS.some(l => l.id === params.id)) throw httpError(404, 'Lesson not found.');
   user.lessonsRead = [...new Set([...(user.lessonsRead || []), params.id])];
   await store.saveUser(user.id, { lessonsRead: user.lessonsRead });
   return { read: user.lessonsRead };
-});
-route('POST', '/api/quiz/:id', async ({ user, params, body }) => {
-  if (!CLASS_LESSONS.some(l => l.id === params.id)) throw httpError(404, 'Lesson not found.');
-  const prev = user.quizScores?.[params.id], score = Math.max(0, Number(body.score) || 0), total = Number(body.total) || 0;
-  user.quizScores = { ...user.quizScores, [params.id]: !prev || score >= prev.score ? { score, total, at: Date.now() } : prev };
-  user.lessonsRead = [...new Set([...(user.lessonsRead || []), params.id])];
-  await store.saveUser(user.id, { quizScores: user.quizScores, lessonsRead: user.lessonsRead });
-  return { scores: user.quizScores, read: user.lessonsRead };
 });
 
 // ---------- multi-leg strategies ----------
