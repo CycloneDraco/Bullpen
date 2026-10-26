@@ -1,32 +1,10 @@
-// Bullpen feature views: lessons, alerts, news, screener, leaderboard, friends, game activity,
+// Bullpen feature views: alerts, news, screener, leaderboard, friends, game activity,
 // badges, option strategies, portfolio analytics, tooltips and keyboard shortcuts.
-import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route } from './app.js';
+import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route, loadGames } from './app.js';
 import { BADGES, CRYPTO, isCrypto, checkAlerts } from './backend.js';
-import { LESSONS, GLOSSARY } from './learn.js';
 
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : when(t); };
 const qtyFmt = n => (+n).toLocaleString(undefined, { maximumFractionDigits: 6 });
-
-// ---------- ⓘ tooltips ----------
-export const tip = term => GLOSSARY[term] ? `<button type="button" class="tip" data-tip="${term}" aria-label="What is ${esc(GLOSSARY[term][0])}?">i</button>` : '';
-let tipEl = null;
-const closeTip = () => { tipEl?.remove(); tipEl = null; };
-document.addEventListener('click', e => {
-  const b = e.target.closest('.tip');
-  if (!b) { if (!e.target.closest('.tip-pop')) closeTip(); return; }
-  e.preventDefault(); e.stopPropagation();
-  if (tipEl?.dataset.for === b.dataset.tip) return closeTip();
-  closeTip();
-  const [title, text, lesson] = GLOSSARY[b.dataset.tip];
-  tipEl = document.createElement('div'); tipEl.className = 'tip-pop'; tipEl.dataset.for = b.dataset.tip; tipEl.setAttribute('role', 'tooltip');
-  tipEl.innerHTML = `<b>${esc(title)}</b><p>${esc(text)}</p>${lesson ? `<a href="#/learn/${lesson}">Learn more →</a>` : ''}`;
-  document.body.append(tipEl);
-  const r = b.getBoundingClientRect(), w = tipEl.offsetWidth;
-  tipEl.style.left = Math.max(12, Math.min(innerWidth - w - 12, r.left + r.width / 2 - w / 2)) + 'px';
-  tipEl.style.top = (r.bottom + scrollY + 8) + 'px';
-});
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTip(); });
-addEventListener('hashchange', closeTip);
 
 // ---------- badges ----------
 export async function checkBadges() {
@@ -260,26 +238,6 @@ export async function mountActivity(host, game) {
   await draw();
 }
 
-// ---------- learn: trading guides + glossary ----------
-const isRead = id => (state.me.lessonsRead || []).includes(id);
-export function viewLessons() {
-  const groups = [...new Set(LESSONS.map(l => l.group))], done = LESSONS.filter(l => isRead(l.id)).length;
-  app().innerHTML = `<div class="view"><div class="page-head"><div><h1>Learn</h1><div class="muted small">Short guides to everything you can do in Bullpen.</div></div><span class="muted small">${done} of ${LESSONS.length} read</span></div>
-    <div class="progress"><span style="width:${done / LESSONS.length * 100}%"></span></div>
-    ${groups.map(gr => `<h3 class="muted" style="margin:18px 0 8px;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em">${gr}</h3>
-      <div class="lesson-list">${LESSONS.filter(l => l.group === gr).map(l => `<a class="card lesson-row ${isRead(l.id) ? 'done' : ''}" href="#/learn/${l.id}"><span class="check">${isRead(l.id) ? '✓' : ''}</span><b>${esc(l.title)}</b><span class="spacer"></span><span class="muted small">${l.mins} min</span></a>`).join('')}</div>`).join('')}
-    <div class="card" style="margin-top:28px"><h2 style="margin-bottom:10px">Glossary</h2><dl class="glossary">${Object.values(GLOSSARY).sort((a, b) => a[0].localeCompare(b[0])).map(([t, d, l]) => `<dt>${esc(t)}</dt><dd>${esc(d)} ${l ? `<a href="#/learn/${l}">Guide →</a>` : ''}</dd>`).join('')}</dl></div></div>`;
-}
-export async function viewLesson(id) {
-  const L = LESSONS.find(l => l.id === id);
-  if (!L) { location.hash = '#/learn'; return; }
-  const i = LESSONS.indexOf(L), next = LESSONS[i + 1], prev = LESSONS[i - 1];
-  app().innerHTML = `<div class="view lesson"><a href="#/learn" class="small">‹ Learn</a><div class="muted small" style="margin-top:12px">${esc(L.group)} · ${L.mins} min</div><h1>${esc(L.title)}</h1>
-    <div class="card prose">${L.body.map(p => `<p>${esc(p)}</p>`).join('')}</div>
-    <div class="row" style="margin-top:16px">${prev ? `<a class="btn secondary" href="#/learn/${prev.id}">‹ ${esc(prev.title)}</a>` : ''}<span class="spacer"></span>${next ? `<a class="btn" href="#/learn/${next.id}">${esc(next.title)} ›</a>` : '<a class="btn" href="#/learn">All guides</a>'}</div></div>`;
-  if (!isRead(id)) { const r = await api('/api/learn/' + id, { method: 'POST' }).catch(() => null); if (r) { state.me.lessonsRead = r.read; checkBadges(); } }
-}
-
 // ---------- option strategy builder ----------
 const TEMPLATES = {
   long_call: ['Long call', 'Bet on a rise with limited risk.', [['buy', 'C', 0]]],
@@ -453,8 +411,8 @@ export function renderAnalytics(pane, pf, g) {
 }
 
 // ---------- keyboard shortcuts ----------
-const SHORTCUTS = [['/', 'Search symbols'], ['g then d', 'Dashboard'], ['g then p', 'Portfolio'], ['g then t', 'Trade'], ['g then r', 'Research'], ['g then s', 'Screener'], ['g then w', 'Watchlist'], ['g then g', 'Games'], ['g then b', 'Leaderboard'], ['g then f', 'Friends'], ['g then l', 'Learn'], ['b / s', 'Buy / sell the symbol you’re viewing'], ['o', 'Options for the symbol you’re viewing'], ['a', 'Set a price alert'], ['n', 'Notifications'], ['[', 'Open or close the sidebar'], ['?', 'Show this list']];
-const GO = { d: '#/', p: '#/portfolio', t: '#/trade', r: '#/research', s: '#/screener', w: '#/watchlist', g: '#/games', b: '#/leaderboard', f: '#/friends', l: '#/learn' };
+const SHORTCUTS = [['/', 'Search symbols'], ['g then d', 'Dashboard'], ['g then p', 'Portfolio'], ['g then t', 'Trade'], ['g then r', 'Research'], ['g then s', 'Screener'], ['g then w', 'Watchlist'], ['g then g', 'Games'], ['g then b', 'Leaderboard'], ['g then f', 'Friends'], ['b / s', 'Buy / sell the symbol you’re viewing'], ['o', 'Options for the symbol you’re viewing'], ['a', 'Set a price alert'], ['n', 'Notifications'], ['[', 'Open or close the sidebar'], ['?', 'Show this list']];
+const GO = { d: '#/', p: '#/portfolio', t: '#/trade', r: '#/research', s: '#/screener', w: '#/watchlist', g: '#/games', b: '#/leaderboard', f: '#/friends' };
 export function mountShortcuts() {
   let pendingG = 0;
   document.addEventListener('keydown', e => {
@@ -472,6 +430,76 @@ export function mountShortcuts() {
     else if (e.key === 'a') location.hash = '#/alerts' + (sym ? `?symbol=${encodeURIComponent(sym)}` : '');
     else if (e.key === 'n') $('#bell')?.click();
     else if (e.key === '?') modal(`<h2>Keyboard shortcuts</h2><div class="rows">${SHORTCUTS.map(([k, d]) => `<div><span>${esc(d)}</span><span>${k.split(' ').map(x => x === 'then' || x === '/' && k !== '/' ? `<span class="muted small"> ${x} </span>` : `<kbd>${esc(x)}</kbd>`).join('')}</span></div>`).join('')}</div><div class="actions"><button class="btn" data-x>Done</button></div>`, (el, close) => { $('[data-x]', el).onclick = close; });
+  });
+}
+
+// ---------- admin ----------
+export async function viewAdmin(q) {
+  if (!state.me.admin) { app().innerHTML = '<div class="card empty view">Admin mode is off. Unlock it in Settings.</div>'; return; }
+  const tab = q.get('tab') || 'players';
+  app().innerHTML = `<div class="view"><div class="page-head"><div><h1>Admin</h1><div class="muted small">Manage every account and game.</div></div>
+    <div class="seg"><button data-t="players" class="${tab === 'players' ? 'on' : ''}">Players</button><button data-t="games" class="${tab === 'games' ? 'on' : ''}">Games</button></div></div>
+    <div class="card"><input id="afilter" placeholder="Filter" aria-label="Filter" style="max-width:280px;margin-bottom:12px"><div id="alist"><div class="skeleton" style="height:200px"></div></div></div></div>`;
+  $$('.page-head .seg button').forEach(b => b.onclick = () => location.hash = '#/admin?tab=' + b.dataset.t);
+  const filter = () => { const v = $('#afilter').value.toLowerCase(); $$('#alist tbody tr').forEach(tr => tr.hidden = !tr.textContent.toLowerCase().includes(v)); };
+  $('#afilter').oninput = filter;
+  if (tab === 'players') {
+    const users = await api('/api/admin/users');
+    $('#alist').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Player</th><th>Email</th><th>Joined</th><th></th></tr></thead><tbody>
+      ${users.map(u => `<tr><td><a class="who" href="#/profile/${encodeURIComponent(u.id)}">${avatarHtml(u, 30)}<span><b>${esc(u.name || 'Unnamed')}</b>${u.handle ? `<div class="muted small">@${esc(u.handle)}</div>` : ''}</span></a></td>
+        <td class="muted">${esc(u.email || '—')}</td><td class="muted">${u.joined ? new Date(u.joined).toLocaleDateString() : '—'}</td>
+        <td class="r"><button class="btn sm secondary" data-edit="${u.id}">Edit</button> <button class="btn sm danger" data-del="${u.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+    $$('[data-edit]').forEach(b => b.onclick = () => {
+      const u = users.find(x => x.id === b.dataset.edit);
+      modal(`<h2>Edit ${esc(u.name)}</h2><div class="stack">
+        <label class="field"><span>Display name</span><input id="aeName" value="${esc(u.name || '')}" maxlength="40"></label>
+        <label class="field"><span>Username</span><input id="aeHandle" value="${esc(u.handle || '')}" maxlength="20"></label>
+        <label class="field"><span>Bio</span><textarea id="aeBio" rows="2" maxlength="160">${esc(u.bio || '')}</textarea></label>
+        ${u.picture ? '<label class="switch"><div class="t">Remove profile picture</div><input type="checkbox" id="aePic"></label>' : ''}</div>
+        <div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn" data-ok>Save</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = close;
+        $('[data-ok]', el).onclick = async () => {
+          try { await api(`/api/admin/users/${u.id}`, { method: 'PATCH', body: { name: $('#aeName', el).value, handle: $('#aeHandle', el).value, bio: $('#aeBio', el).value, removePicture: $('#aePic', el)?.checked } }); close(); toast('Player updated.'); route(); }
+          catch (err) { toast(err.message, true); }
+        };
+      });
+    });
+    $$('[data-del]').forEach(b => b.onclick = () => {
+      const u = users.find(x => x.id === b.dataset.del);
+      modal(`<h2>Delete ${esc(u.name)}’s data?</h2><p class="muted">Removes their profile, their portfolios and every game they created. Their sign-in itself stays (Firebase only lets them delete that), but they’ll start fresh.</p>
+        <div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn danger" data-ok>Delete</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = close;
+        $('[data-ok]', el).onclick = async () => { try { await api(`/api/admin/users/${u.id}`, { method: 'DELETE' }); close(); toast('Player data deleted.'); route(); } catch (err) { toast(err.message, true); } };
+      });
+    });
+  } else {
+    const games = await api('/api/admin/games');
+    $('#alist').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Game</th><th>Creator</th><th class="r">Players</th><th>Status</th><th></th></tr></thead><tbody>
+      ${games.map(g => `<tr><td><a href="#/games/${g.id}"><b>${esc(g.name)}</b></a>${g.practice ? ' <span class="badge">Practice</span>' : g.privacy === 'private' ? ' <span class="badge">Private</span>' : ''}</td><td>${esc(g.ownerName)}</td><td class="r">${g.players}</td>
+        <td><span class="badge ${g.active ? 'live' : ''}">${g.active ? 'Active' : 'Inactive'}</span></td>
+        <td class="r"><button class="btn sm secondary" data-pl="${g.id}">Players</button> <a class="btn sm secondary" href="#/games/${g.id}">Settings</a> <button class="btn sm danger" data-gdel="${g.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+    $$('[data-pl]').forEach(b => b.onclick = () => adminPlayers(games.find(g => g.id === b.dataset.pl)));
+    $$('[data-gdel]').forEach(b => b.onclick = () => {
+      const g = games.find(x => x.id === b.dataset.gdel);
+      modal(`<h2>Delete “${esc(g.name)}”?</h2><p class="muted">Every player’s portfolio in this game is removed. This can’t be undone.</p><div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn danger" data-ok>Delete</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = close;
+        $('[data-ok]', el).onclick = async () => { try { await api('/api/games/' + g.id, { method: 'DELETE' }); close(); await loadGames(); toast('Game deleted.'); route(); } catch (err) { toast(err.message, true); } };
+      });
+    });
+  }
+}
+async function adminPlayers(g) {
+  const players = await api(`/api/admin/games/${g.id}/players`);
+  modal(`<h2>${esc(g.name)}</h2><div class="admin-players">${players.map(p => `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+      ${avatarHtml(p, 30)}<div style="flex:1;min-width:120px"><b>${esc(p.name)}</b><div class="muted small">Value ${money(p.equity)} · cash ${money(p.cash)} · ${p.trades} trades</div></div>
+      <input type="number" step="any" value="${p.cash.toFixed(2)}" data-cash="${p.userId}" aria-label="Cash for ${esc(p.name)}" style="width:130px">
+      <button class="btn sm secondary" data-set="${p.userId}">Set cash</button><button class="btn sm secondary" data-reset="${p.userId}">Reset</button>${p.userId !== g.owner ? `<button class="btn sm danger" data-kick="${p.userId}">Remove</button>` : ''}</div>`).join('') || '<div class="empty">No players.</div>'}</div>
+    <div class="actions"><button class="btn" data-x>Done</button></div>`, (el, close) => {
+    $('[data-x]', el).onclick = close;
+    const act = async (uid, init, msg) => { try { await api(`/api/admin/games/${g.id}/players/${uid}`, init); toast(msg); close(); adminPlayers(g); } catch (err) { toast(err.message, true); } };
+    $$('[data-set]', el).forEach(b => b.onclick = () => act(b.dataset.set, { method: 'PATCH', body: { cash: +$(`[data-cash="${b.dataset.set}"]`, el).value } }, 'Cash updated.'));
+    $$('[data-reset]', el).forEach(b => b.onclick = () => act(b.dataset.reset, { method: 'PATCH', body: { reset: true } }, 'Portfolio reset.'));
+    $$('[data-kick]', el).forEach(b => b.onclick = () => act(b.dataset.kick, { method: 'DELETE' }, 'Player removed.'));
   });
 }
 

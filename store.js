@@ -40,6 +40,10 @@ async function firebaseStore(cfg) {
     async reloadUser() { await auth.currentUser.reload(); return user = { ...user, emailVerified: auth.currentUser.emailVerified }; },
     deleteAuthUser: () => A.deleteUser(auth.currentUser).then(() => { user = null; }),
     getProfile: async uid => data(await F.getDoc(d('profiles', uid))),
+    // Admins are listed in admins/{uid}, which can only be created from the Firebase console.
+    isAdmin: async uid => (await F.getDoc(d('admins', uid))).exists(),
+    listProfiles: async () => (await F.getDocs(F.collection(db, 'profiles'))).docs.map(data),
+    listAllGames: async () => (await F.getDocs(F.collection(db, 'games'))).docs.map(data),
     saveProfile: (uid, p) => F.setDoc(d('profiles', uid), p, { merge: true }),
     deleteUserDocs: uid => Promise.all([F.deleteDoc(d('users', uid)), F.deleteDoc(d('profiles', uid))]),
     // Game activity feed (trades, joins, comments).
@@ -129,7 +133,10 @@ function localStore() {
     async deleteAuthUser() { db.session = null; persist(); },
     getProfile: async uid => db.users[uid] ? clone({ id: uid, name: db.users[uid].name, picture: db.users[uid].picture, bio: db.users[uid].bio, color: db.users[uid].color, joined: db.users[uid].joined, handle: db.users[uid].handle, badges: db.users[uid].badges }) : null,
     async saveProfile() {},
-    async deleteUserDocs(uid) { delete db.users[uid]; persist(); },
+    isAdmin: async () => true,
+    listProfiles: async () => Object.entries(db.users).map(([id, u]) => clone({ id, name: u.name, picture: u.picture, bio: u.bio, color: u.color, joined: u.joined, handle: u.handle, badges: u.badges })),
+    listAllGames: async () => Object.values(db.games).map(clone),
+    async deleteUserDocs(uid) { delete db.users[uid]; if (db.session === uid) db.session = null; persist(); },
     async addActivity(gid, item) { ((db.activity ||= {})[gid] ||= []).unshift(clone(item)); persist(); },
     listActivity: async (gid, n = 80) => clone((db.activity?.[gid] || []).slice(0, n)),
     async deleteActivity(gid, id) { if (db.activity?.[gid]) db.activity[gid] = db.activity[gid].filter(a => a.id !== id); persist(); },

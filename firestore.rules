@@ -4,28 +4,34 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function game(gid) { return /databases/$(database)/documents/games/$(gid); }
+    // Admins: add a document admins/{your user ID} in the Firebase console. The app can't create these.
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
 
-    match /users/{uid} {
-      allow read, write: if request.auth.uid == uid;
+    match /admins/{uid} {
+      allow read: if request.auth.uid == uid;
     }
 
-    // Public profile: name, picture, bio. Anyone signed in can view; only you can edit.
+    match /users/{uid} {
+      allow read, write: if request.auth.uid == uid || isAdmin();
+    }
+
+    // Public profile: name, picture, bio. Anyone signed in can view; only you (or an admin) can edit.
     match /profiles/{uid} {
       allow read: if signedIn();
-      allow write: if request.auth.uid == uid;
+      allow write: if request.auth.uid == uid || isAdmin();
     }
 
     // @usernames: each name points at exactly one account.
     match /handles/{handle} {
       allow read: if signedIn();
-      allow create: if request.resource.data.uid == request.auth.uid;
-      allow update: if resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid;
-      allow delete: if resource.data.uid == request.auth.uid;
+      allow create: if request.resource.data.uid == request.auth.uid || isAdmin();
+      allow update: if (resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid) || isAdmin();
+      allow delete: if resource.data.uid == request.auth.uid || isAdmin();
     }
 
     // Game invites and challenges: visible only to sender and recipient.
     match /invites/{id} {
-      allow read, delete: if request.auth.uid == resource.data.to || request.auth.uid == resource.data.from;
+      allow read, delete: if request.auth.uid == resource.data.to || request.auth.uid == resource.data.from || isAdmin();
       allow create: if request.resource.data.from == request.auth.uid;
     }
 
@@ -34,37 +40,37 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.owner == request.auth.uid
         && request.resource.data.members == [request.auth.uid];
-      allow delete: if request.auth.uid == resource.data.owner;
-      // The owner edits settings; anyone else may only add or remove themselves from members.
-      allow update: if request.auth.uid == resource.data.owner
+      allow delete: if request.auth.uid == resource.data.owner || isAdmin();
+      // The creator edits settings; anyone else may only add or remove themselves from members.
+      allow update: if request.auth.uid == resource.data.owner || isAdmin()
         || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
           && ((request.resource.data.members.toSet() == resource.data.members.toSet().union([request.auth.uid].toSet())
                && existsAfter(/databases/$(database)/documents/games/$(gid)/players/$(request.auth.uid)))
             || request.resource.data.members.toSet() == resource.data.members.toSet().difference([request.auth.uid].toSet())));
 
-      // Game password, readable only by the game owner.
+      // Game password, readable only by the game creator (or an admin).
       match /private/{doc} {
-        allow read: if request.auth.uid == get(game(gid)).data.owner;
+        allow read: if request.auth.uid == get(game(gid)).data.owner || isAdmin();
         allow write: if request.auth.uid == getAfter(game(gid)).data.owner
-          || request.auth.uid == get(game(gid)).data.owner;
+          || request.auth.uid == get(game(gid)).data.owner || isAdmin();
       }
 
-      // Activity feed: members post as themselves; authors or the owner can delete.
+      // Activity feed: members post as themselves; authors, the creator or an admin can delete.
       match /activity/{id} {
         allow read: if signedIn();
         allow create: if request.resource.data.userId == request.auth.uid && request.auth.uid in get(game(gid)).data.members;
-        allow delete: if request.auth.uid == resource.data.userId || request.auth.uid == get(game(gid)).data.owner;
+        allow delete: if request.auth.uid == resource.data.userId || request.auth.uid == get(game(gid)).data.owner || isAdmin();
       }
 
       match /players/{uid} {
         allow read: if signedIn();
-        // Joining needs the password when the game has one (the owner joins at creation).
+        // Joining needs the password when the game has one (the creator joins at creation).
         allow create: if request.auth.uid == uid && (
           getAfter(game(gid)).data.owner == uid
           || !exists(/databases/$(database)/documents/games/$(gid)/private/secret)
           || get(/databases/$(database)/documents/games/$(gid)/private/secret).data.password == request.resource.data.joinPassword);
-        allow update: if request.auth.uid == uid;
-        allow delete: if request.auth.uid == uid || request.auth.uid == get(game(gid)).data.owner;
+        allow update: if request.auth.uid == uid || isAdmin();
+        allow delete: if request.auth.uid == uid || request.auth.uid == get(game(gid)).data.owner || isAdmin();
       }
     }
   }

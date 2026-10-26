@@ -145,11 +145,30 @@ async function loadGames() {
   state.games = await api('/api/games');
   const ids = state.games.mine.map(g => g.id);
   let saved; try { saved = localStorage.getItem('bp_game'); } catch {}
-  state.gameId = [state.gameId, saved, prefs().defaultGame].find(x => ids.includes(x)) || ids[0];
-  const sel = $('#gameSelect');
-  sel.innerHTML = state.games.mine.map(g => `<option value="${g.id}" ${g.id === state.gameId ? 'selected' : ''}>${esc(g.settings.name)}</option>`).join('');
+  // The choice is kept per device and on the account, so it sticks across reloads and devices.
+  state.gameId = [state.gameId, saved, prefs().lastGame, prefs().defaultGame].find(x => ids.includes(x)) || ids[0];
+  renderGamePicker();
 }
 const activeGame = () => state.games.mine.find(g => g.id === state.gameId);
+const CHEVRON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+function renderGamePicker() {
+  const g = activeGame();
+  $('#gamePickBtn').innerHTML = `<span class="gp-name">${esc(g?.settings.name || 'No game')}</span>${g?.sandbox ? '<span class="badge">Practice</span>' : ''}${CHEVRON}`;
+  $('#gameMenu').innerHTML = state.games.mine.map(x => `<button type="button" role="option" aria-selected="${x.id === state.gameId}" data-g="${x.id}">
+      <span class="gp-check" aria-hidden="true">${x.id === state.gameId ? '✓' : ''}</span><span class="gp-name">${esc(x.settings.name)}</span>${x.sandbox ? '<span class="badge">Practice</span>' : `<span class="muted small">${x.players} player${x.players === 1 ? '' : 's'}</span>`}</button>`).join('')
+    + '<a href="#/games" class="gp-all">Browse all games</a>';
+  $$('#gameMenu [data-g]').forEach(b => b.onclick = () => switchGame(b.dataset.g));
+}
+function switchGame(id) {
+  if (!state.games.mine.some(g => g.id === id)) return;
+  state.gameId = id;
+  try { localStorage.setItem('bp_game', id); } catch {}
+  savePrefs({ lastGame: id }).catch(() => {});
+  $('#gameMenu').hidden = true; $('#gamePickBtn').setAttribute('aria-expanded', 'false');
+  renderGamePicker(); toast(`Switched to ${activeGame().settings.name}.`); route();
+}
+$('#gamePickBtn').addEventListener('click', e => { e.stopPropagation(); const m = $('#gameMenu'); m.hidden = !m.hidden; $('#gamePickBtn').setAttribute('aria-expanded', String(!m.hidden)); });
+document.addEventListener('click', e => { if (!e.target.closest('.game-pick')) { $('#gameMenu').hidden = true; $('#gamePickBtn').setAttribute('aria-expanded', 'false'); } });
 // Sidebar: beside the page on wide screens (remembered), a drawer on narrow ones.
 const wide = matchMedia('(min-width: 1000px)');
 function setSide(open, remember) {
@@ -170,6 +189,7 @@ wide.addEventListener('change', initSide);
 let shellMounted = false;
 function renderShell() {
   $('#nav').hidden = false; $('#side').hidden = false;
+  $('#adminLink').hidden = !state.me.admin;
   if (!shellMounted) initSide();
   if (!shellMounted) {
     shellMounted = true; F.mountBell(); F.mountShortcuts();
@@ -184,7 +204,6 @@ function renderShell() {
 $('#avatarBtn').addEventListener('click', e => { e.stopPropagation(); $('#avatarMenu').hidden = !$('#avatarMenu').hidden; });
 document.addEventListener('click', () => { $('#avatarMenu').hidden = true; });
 $('#signOut').addEventListener('click', async () => { await signOut(); state.me = null; state.games = { mine: [], public: [] }; route(); });
-$('#gameSelect').addEventListener('change', e => { state.gameId = e.target.value; try { localStorage.setItem('bp_game', state.gameId); } catch {} route(); });
 
 // ---------- sign in ----------
 function viewSignIn() {
@@ -267,7 +286,7 @@ async function viewDashboard() {
       <div class="card"><div class="card-head"><h2>Top holdings</h2><a href="#/portfolio" class="small">See all</a></div><div id="top"></div></div>
       <div class="card"><div class="card-head"><h2>Market movers</h2><span class="muted small">Large caps</span></div><div id="movers"></div></div>
     </div>
-    <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Market news</h2><a href="#/learn" class="small">New to this? Read the guides</a></div><div id="news"></div></div></div>`;
+    <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Market news</h2><span class="muted small">Live headlines</span></div><div id="news"></div></div></div>`;
   F.renderNews($('#news'), '', 6);
   F.checkBadges();
   const load = async () => {
@@ -375,7 +394,7 @@ async function viewTrade(q) {
       <div class="field"><span class="muted small" style="font-weight:600">Action</span><div class="seg full" id="act">${actions.map(a => `<button type="button" data-v="${a}">${a[0].toUpperCase() + a.slice(1)}</button>`).join('')}</div></div>
       <div class="form-grid">
         <label class="field"><span>Quantity</span><input name="qty" type="number" min="1" step="1" inputmode="decimal" value="${esc(f.qty)}" placeholder="0"><div class="hint" id="maxq"></div></label>
-        <label class="field"><span>Order type ${F.tip('limit')}</span><select name="type">${types.map(t => `<option value="${t}">${{ market: 'Market', limit: 'Limit', stop: 'Stop', trailing: 'Trailing stop' }[t]}</option>`).join('')}</select></label>
+        <label class="field"><span>Order type</span><select name="type">${types.map(t => `<option value="${t}">${{ market: 'Market', limit: 'Limit', stop: 'Stop', trailing: 'Trailing stop' }[t]}</option>`).join('')}</select></label>
         <label class="field" data-for="limit" hidden><span>Limit price</span><input name="limitPrice" type="number" step="0.01" min="0"></label>
         <label class="field" data-for="stop" hidden><span>Stop price</span><input name="stopPrice" type="number" step="0.01" min="0"></label>
         <label class="field" data-for="trailing" hidden><span>Trail by</span><div class="row" style="flex-wrap:nowrap"><input name="trail" type="number" step="0.01" min="0"><select name="trailUnit" style="width:80px"><option>%</option><option>$</option></select></div></label>
@@ -437,7 +456,7 @@ async function viewTrade(q) {
   });
   setAct(actions.includes(f.action) ? f.action : 'buy');
   pf = await api(`/api/games/${g.id}/portfolio`);
-  $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l} ${l === 'Buying power' ? F.tip('buyingPower') : l === 'Account value' ? F.tip('equity') : ''}</div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length + (pf.options || []).length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
+  $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l} </div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length + (pf.options || []).length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
   $('#rules').innerHTML = `<h3 style="color:var(--ink);margin-bottom:6px">Game rules</h3>Commission: ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) + ' per trade' : s.commission + '% of trade') : 'none'}<br>Short selling: ${s.allowShort ? `on (min ${money(s.minShortPrice)})` : 'off'}<br>Margin: ${s.allowMargin ? `on (${s.marginInterest}% interest)` : 'off'}<br>${s.minStockPrice ? `Min. stock price: ${money(s.minStockPrice)}<br>` : ''}${s.maxPositionPct < 100 ? `Max position: ${s.maxPositionPct}% of portfolio<br>` : ''}${s.dailyTradeLimit ? `Daily trade limit: ${s.dailyTradeLimit}<br>` : ''}ETFs: ${s.allowEtf ? 'allowed' : 'not allowed'}<br>Options: ${s.allowOptions ? (s.allowOptionWriting ? 'buy and write' : 'buy only') : 'off'}${s.executionDelay ? `<br>Execution delay: ${s.executionDelay} min on ${s.delayApplies === 'all' ? 'every order' : 'sells'}` : ''}${s.settleT1 ? '<br>Sale proceeds settle next trading day' : ''}`;
   if (f.symbol) loadQuote(f.symbol); else form.symbol.focus();
 }
@@ -495,7 +514,7 @@ async function viewTradeOptions(q) {
     $$('#oside button').forEach(b => b.classList.toggle('on', b.dataset.v === st.side));
     const rows = st.side === 'C' ? ch.calls : ch.puts, S = ch.quote.price;
     let marked = false;
-    $('#chain').innerHTML = `<div class="table-wrap"><table class="chain"><thead><tr><th>Strike</th><th class="r">Bid ${F.tip('bid')}</th><th class="r">Ask ${F.tip('ask')}</th><th class="r">Mid</th><th class="r">Delta ${F.tip('delta')}</th><th class="r">IV ${F.tip('iv')}</th></tr></thead><tbody>
+    $('#chain').innerHTML = `<div class="table-wrap"><table class="chain"><thead><tr><th>Strike</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Mid</th><th class="r">Delta</th><th class="r">IV</th></tr></thead><tbody>
       ${rows.map(c => { const line = !marked && c.strike >= S ? (marked = true, `<tr class="spot"><td colspan="6">${esc(ch.quote.symbol)} ${money(S, { full: true })}</td></tr>`) : '';
         return `${line}<tr class="link ${c.itm ? 'itm' : ''}" data-k="${esc(c.key)}"><td><b>${money(c.strike)}</b></td><td class="r">${money(c.bid, { full: true })}</td><td class="r">${money(c.ask, { full: true })}</td><td class="r">${money(c.mid, { full: true })}</td><td class="r">${c.delta.toFixed(2)}</td><td class="r">${(c.iv * 100).toFixed(1)}%</td></tr>`; }).join('')}</tbody></table></div>`;
     $$('#chain tr[data-k]').forEach(r => r.onclick = () => select(rows.find(c => c.key === r.dataset.k)));
@@ -682,7 +701,7 @@ async function viewGames() {
   app.innerHTML = `<div class="view"><div class="page-head"><h1>Games</h1><div class="row"><button class="btn secondary" id="joinCode">Join with ID</button><a class="btn" href="#/games/new">Create game</a></div></div>
     <div class="card"><h2 style="margin-bottom:8px">My games</h2><div class="table-wrap"><table>${head}<tbody>${state.games.mine.map(g => row(g, true)).join('')}</tbody></table></div></div>
     <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Public games</h2><input id="filter" placeholder="Filter" style="max-width:220px" aria-label="Filter public games"></div><div class="table-wrap"><table>${head}<tbody id="pub">${state.games.public.map(g => row(g)).join('') || '<tr><td colspan="6" class="empty">No public games to join right now. Create one!</td></tr>'}</tbody></table></div></div></div>`;
-  $$('[data-use]').forEach(b => b.onclick = () => { $('#gameSelect').value = b.dataset.use; $('#gameSelect').dispatchEvent(new Event('change')); });
+  $$('[data-use]').forEach(b => b.onclick = () => switchGame(b.dataset.use));
   $$('[data-join]').forEach(b => b.onclick = () => joinGame(b.dataset.join, !!b.dataset.pw));
   $('#filter').oninput = e => $$('#pub tr').forEach(tr => tr.hidden = !tr.textContent.toLowerCase().includes(e.target.value.toLowerCase()));
   $('#joinCode').onclick = () => modal(`<h2>Join a game</h2><label class="field"><span>Game ID or invite link</span><input id="gid" placeholder="Paste here"></label><label class="field" style="margin-top:12px"><span>Password (if any)</span><input id="gpw" type="password"></label><div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn" data-ok>Join</button></div>`, (el, close) => {
@@ -718,8 +737,8 @@ async function viewGame(gid) {
       ${rankings.map(r => `<tr class="${s.showPortfolios || r.userId === state.me.id ? 'link' : ''}" ${s.showPortfolios || r.userId === state.me.id ? `data-go="#/portfolio${r.userId === state.me.id ? '' : '?player=' + r.playerId}"` : ''}><td><span class="rank r${r.rank}">${r.rank}</span></td><td><a href="#/profile/${encodeURIComponent(r.userId)}" class="who">${avatarHtml(r, 28)}<b>${esc(r.name)}</b></a>${r.userId === state.me.id ? ' <span class="badge">You</span>' : ''}</td><td class="r">${money(r.equity)}</td><td class="r ${cls(r.gain)}">${pct(r.gainPct)}</td></tr>`).join('')}</tbody></table></div></div>
       <div class="stack">${!g.sandbox && g.joined ? '<button class="btn" id="invF">Invite friends</button>' : ''}${!g.sandbox ? `<div class="card"><h3>Invite players</h3><p class="muted small">Share this link${g.hasPassword ? ' and the game password' : ''}.</p><div class="row" style="flex-wrap:nowrap"><input value="${esc(link)}" readonly id="lnk"><button class="btn secondary sm" id="copy">Copy</button></div><div class="hint">Game ID: ${g.id}</div></div>` : ''}
         <div class="card small"><h3 style="margin-bottom:6px">Rules</h3><div class="muted">Commission ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) : s.commission + '%') : 'free'} · Short selling ${s.allowShort ? 'on' : 'off'} · Margin ${s.allowMargin ? 'on' : 'off'} · Late entry ${s.allowLateEntry ? 'on' : 'off'} · Resets ${s.allowReset ? 'on' : 'off'} · ${s.privacy === 'public' ? 'Public' : 'Private'}</div></div></div></div>
-    ${g.isOwner ? `<h2 style="margin:32px 0 14px">Game settings</h2><form id="sf" class="grid g-half">${settingsForm(s, g.sandbox)}<div class="card" style="align-self:start"><button class="btn block">Save settings</button>${!g.sandbox ? '<button type="button" class="btn danger block" id="del" style="margin-top:10px">Delete game</button>' : ''}</div></form>` : ''}</div>`;
-  $('#use')?.addEventListener('click', () => { $('#gameSelect').value = g.id; $('#gameSelect').dispatchEvent(new Event('change')); });
+    ${g.sandbox && !state.me.admin ? '<p class="muted small" style="margin-top:24px">Practice portfolio rules are fixed and can’t be edited.</p>' : ''}${(g.isOwner && !g.sandbox) || state.me.admin ? `<h2 style="margin:32px 0 14px">Game settings${!g.isOwner ? ' <span class="badge closed">Admin</span>' : ''}</h2><form id="sf" class="grid g-half">${settingsForm(s, g.sandbox)}<div class="card" style="align-self:start"><button class="btn block">Save settings</button>${!g.sandbox ? '<button type="button" class="btn danger block" id="del" style="margin-top:10px">Delete game</button>' : ''}</div></form>` : ''}</div>`;
+  $('#use')?.addEventListener('click', () => switchGame(g.id));
   $('#join')?.addEventListener('click', () => joinGame(g.id, g.hasPassword));
   $('#invF')?.addEventListener('click', () => F.inviteModal({ game: gameForInvite }));
   if (!g.sandbox) { const box = document.createElement('div'); box.className = 'card'; box.style.marginTop = 'var(--gap)'; $('.view .grid.g2').after(box); F.mountActivity(box, g); }
@@ -737,7 +756,7 @@ function viewSettings() {
   const p = prefs();
   const seg = (k, opts) => `<div class="seg" data-k="${k}">${opts.map(([v, t]) => `<button type="button" data-v="${v}" class="${(p[k] ?? opts[0][0]) === v ? 'on' : ''}">${t}</button>`).join('')}</div>`;
   const sw = (k, t, d, def = true) => `<label class="switch"><div><div class="t">${t}</div><div class="d">${d}</div></div><input type="checkbox" data-k="${k}" ${(p[k] ?? def) ? 'checked' : ''}></label>`;
-  app.innerHTML = `<div class="view"><div class="page-head"><h1>Settings</h1></div><div class="grid g-half">
+  app.innerHTML = `<div class="view"><div class="page-head"><h1 id="setTitle">Settings</h1></div><div class="grid g-half">
     <div class="card stack"><h2>Appearance</h2>
       <div><div class="muted small" style="font-weight:600;margin-bottom:6px">Theme</div>${seg('theme', [['system', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']])}</div>
       <div><div class="muted small" style="font-weight:600;margin-bottom:6px">Accent color</div>${seg('accent', [['blue', 'Blue'], ['green', 'Green'], ['purple', 'Purple'], ['orange', 'Orange'], ['pink', 'Pink'], ['graphite', 'Graphite']])}</div>
@@ -765,12 +784,37 @@ function viewSettings() {
     <div class="card stack"><h2>Your data</h2>
       <div class="row"><div style="flex:1;min-width:200px"><b>Download your data</b><div class="muted small">Every portfolio, order and setting, as a JSON file.</div></div><button class="btn secondary sm" id="exportBtn">Download</button></div>
       <div class="row"><div style="flex:1;min-width:200px"><b>Sign out</b><div class="muted small">Sign out of Bullpen on this device.</div></div><button class="btn secondary sm" id="signOut2">Sign out</button></div>
-      <div class="row"><div style="flex:1;min-width:200px"><b class="down">Delete account</b><div class="muted small">Deletes your profile, your portfolios and every game you created.</div></div><button class="btn danger sm" id="deleteBtn">Delete…</button></div></div>
+      <div class="row"><div style="flex:1;min-width:200px"><b class="down">Delete account</b><div class="muted small">Deletes your profile, your portfolios and every game you created.</div></div><button class="btn danger sm" id="deleteBtn">Delete…</button></div>
+      <form id="adminBox" class="stack" hidden autocomplete="off">${state.me.admin
+        ? '<div class="row"><div style="flex:1"><b>Admin mode is on</b><div class="muted small">You can manage every account and game.</div></div><a class="btn sm" href="#/admin">Open admin</a><button type="button" class="btn secondary sm" id="adminLock">Turn off</button></div>'
+        : '<label class="field"><span>Password</span><input type="password" name="pw" autocomplete="off"></label><button class="btn sm" style="align-self:flex-start">Unlock</button>'}</form></div>
   </div></div>`;
   $$('.seg[data-k]').forEach(sg => $$('button', sg).forEach(b => b.onclick = async () => { $$('button', sg).forEach(x => x.classList.toggle('on', x === b)); await savePrefs({ [sg.dataset.k]: b.dataset.v }); }));
   $$('input[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.checked }).then(() => toast('Saved.')));
   $$('select[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.value || null }).then(() => toast('Saved.')));
   mountAccountSettings();
+  // Hidden admin unlock: click the Settings title 10 times quickly.
+  let taps = [];
+  $('#setTitle').addEventListener('click', () => {
+    taps = [...taps.filter(t => Date.now() - t < 4000), Date.now()];
+    if (taps.length >= 10) { taps = []; $('#adminBox').hidden = false; $('#adminBox input')?.focus(); $('#adminBox').scrollIntoView({ block: 'center' }); }
+  });
+  if (state.me.admin) $('#adminBox').hidden = false;
+  $('#adminBox').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const r = await api('/api/admin/unlock', { method: 'POST', body: { password: e.target.pw.value } });
+      if (r.admin) { state.me.admin = true; renderShell(); toast('Admin mode on.'); location.hash = '#/admin'; return; }
+      modal(`<h2>One more step</h2><p>The password is right, but Firebase doesn’t list this account as an admin yet, so it would block admin changes.</p>
+        <ol class="small" style="padding-left:18px;line-height:1.6"><li>Open the Firebase console → <b>Firestore Database</b> → <b>Data</b>.</li><li>Click <b>Start collection</b>, name it <code>admins</code>.</li><li>Set the <b>Document ID</b> to your user ID below, add any field (e.g. <code>role</code> = <code>admin</code>), and save.</li><li>Make sure the latest <code>firestore.rules</code> is published, then unlock again.</li></ol>
+        <div class="row" style="flex-wrap:nowrap"><input readonly value="${esc(r.uid)}" id="uidBox"><button class="btn secondary sm" id="copyUid">Copy</button></div>
+        <div class="actions"><button class="btn" data-x>Done</button></div>`, (el, close) => {
+        $('[data-x]', el).onclick = close;
+        $('#copyUid', el).onclick = () => navigator.clipboard.writeText(r.uid).then(() => toast('User ID copied.'));
+      });
+    } catch (err) { toast(err.message, true); }
+  };
+  $('#adminLock')?.addEventListener('click', async () => { await api('/api/admin/lock', { method: 'POST' }); state.me.admin = false; renderShell(); toast('Admin mode off.'); route(); });
   if (location.hash.includes('edit=profile')) $('#profileCard').scrollIntoView({ block: 'start' });
 }
 
@@ -885,17 +929,16 @@ async function route() {
     else if (path === '/games/new') viewCreateGame();
     else if (path.startsWith('/games/')) await viewGame(path.split('/')[2]);
     else if (path === '/settings') viewSettings();
+    else if (path === '/admin') await F.viewAdmin(q);
     else if (path === '/alerts') await F.viewAlerts(q);
     else if (path === '/screener') await F.viewScreener();
     else if (path === '/leaderboard') await F.viewLeaderboard();
     else if (path === '/friends') await F.viewFriends();
-    else if (path === '/learn') F.viewLessons();
-    else if (path.startsWith('/learn/')) await F.viewLesson(path.split('/')[2]);
     else if (path === '/profile') await viewProfile();
     else if (path.startsWith('/profile/')) await viewProfile(decodeURIComponent(path.split('/')[2]));
     else location.hash = '#/';
   } catch (e) { app.innerHTML = `<div class="card empty view">${esc(e.message)}<br><a href="#/" class="btn sm" style="margin-top:12px">Go to dashboard</a></div>`; }
 }
 window.addEventListener('hashchange', route);
-export { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route };
+export { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route, loadGames, settingsForm, readForm };
 route();

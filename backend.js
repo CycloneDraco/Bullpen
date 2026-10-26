@@ -2,7 +2,6 @@
 // store.js (Firebase or localStorage) and Finnhub for live prices.
 import CONFIG from './config.js';
 import { store } from './store.js';
-import { LESSONS } from './learn.js';
 export { store };
 
 const FH = CONFIG.finnhubBase || 'https://finnhub.io/api/v1';
@@ -492,7 +491,7 @@ async function gamePublic(g, user) {
   const isOwner = g.owner === user.id;
   return {
     id: g.id, owner: g.owner, isOwner, sandbox: !!g.sandboxOf, created: g.created,
-    settings: isOwner ? { ...g.settings, password: g.hasPassword ? await store.getSecret(g.id) : '' } : g.settings,
+    settings: isOwner || user.admin ? { ...g.settings, password: g.hasPassword ? await store.getSecret(g.id) : '' } : g.settings,
     hasPassword: !!g.hasPassword, players: g.members.length, joined: g.members.includes(user.id), active: gameActive(g),
   };
 }
@@ -511,6 +510,9 @@ async function loadMe() {
   await store.saveUser(u.id, { name: me.name, email: me.email || '', picture: me.picture || '', bio: me.bio, color: me.color, joined: me.joined, prefs: me.prefs, watchlist: me.watchlist, lastLogin: Date.now() });
   if (!saved) await store.saveProfile(u.id, publicProfile(me)).catch(() => {});
   await ensureDefaultGame(me);
+  // Admin mode: unlocked in Settings on this device, and only real if Firebase lists the account in admins/.
+  let unlocked; try { unlocked = localStorage.getItem('bp_admin') === u.id; } catch {}
+  me.admin = !!unlocked && await store.isAdmin(u.id).catch(() => false);
   return me;
 }
 export async function signIn(name) { await store.signIn(name); me = null; return loadMe(); }
@@ -548,30 +550,35 @@ const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' 
 const mustGame = async gid => { const g = await store.getGame(gid); if (!g) throw httpError(404, 'Game not found.'); return g; };
 
 route('GET', '/api/me', ({ user }) => ({ user }));
-route('PATCH', '/api/me/profile', async ({ user, body }) => {
-  const name = String(body.name ?? user.name).trim().slice(0, 40);
-  if (!name) throw httpError(400, 'Your display name can’t be empty.');
-  const picture = body.picture === undefined ? user.picture || '' : String(body.picture || '');
+// Profile edits for yourself, or (admin) anyone. Name, bio and picture save first; the
+// @username saves last because it needs its own collection and rule.
+async function applyProfile(target, body) {
+  const name = String(body.name ?? target.name).trim().slice(0, 40);
+  if (!name) throw httpError(400, 'The display name can’t be empty.');
+  const picture = body.picture === undefined ? target.picture || '' : String(body.picture || '');
   if (picture && !/^(data:image\/(jpeg|png|webp);base64,|https:\/\/)/.test(picture)) throw httpError(400, 'That picture format isn’t supported.');
   if (picture.length > 150000) throw httpError(400, 'That picture is too large.');
-  if (body.handle !== undefined) {
-    const handle = String(body.handle).trim().toLowerCase().replace(/^@/, '');
-    if (handle && !/^[a-z0-9_]{3,20}$/.test(handle)) throw httpError(400, 'Usernames are 3–20 letters, numbers or underscores.');
-    if (handle !== (user.handle || '')) {
-      if (handle) await store.claimHandle(user.id, handle, user.handle);
-      else if (user.handle) await store.releaseHandle(user.handle);
-      user.handle = handle;
-    }
-  }
-  Object.assign(user, { name, picture, bio: String(body.bio ?? user.bio ?? '').slice(0, 160), color: /^#[0-9a-f]{6}$/i.test(body.color) ? body.color : user.color || '' });
-  await store.saveUser(user.id, { name: user.name, picture: user.picture, bio: user.bio, color: user.color, handle: user.handle || '' });
-  await store.saveProfile(user.id, publicProfile(user)).catch(() => {});
-  if (body.name !== undefined) await store.setAuthName(name).catch(() => {});
+  const handle = body.handle === undefined ? target.handle || '' : String(body.handle).trim().toLowerCase().replace(/^@/, '');
+  if (handle && !/^[a-z0-9_]{3,20}$/.test(handle)) throw httpError(400, 'Usernames are 3–20 letters, numbers or underscores.');
+  Object.assign(target, { name, picture, bio: String(body.bio ?? target.bio ?? '').slice(0, 160), color: /^#[0-9a-f]{6}$/i.test(body.color) ? body.color : target.color || '' });
+  await store.saveUser(target.id, { name: target.name, picture: target.picture, bio: target.bio, color: target.color });
+  await store.saveProfile(target.id, publicProfile(target));
   // Rankings read names and pictures from each game's player record.
-  await Promise.all((await store.myGames(user.id)).map(async g => {
-    const p = await store.getPlayer(g.id, user.id);
-    if (p) await store.savePlayer(g.id, user.id, { ...p, name: user.name, picture: user.picture, color: user.color });
+  await Promise.all((await store.myGames(target.id)).map(async g => {
+    const p = await store.getPlayer(g.id, target.id);
+    if (p) await store.savePlayer(g.id, target.id, { ...p, name: target.name, picture: target.picture, color: target.color });
   }));
+  if (handle !== (target.handle || '')) {
+    if (handle) await store.claimHandle(target.id, handle, target.handle);
+    else if (target.handle) await store.releaseHandle(target.handle);
+    target.handle = handle;
+    await store.saveUser(target.id, { handle }); await store.saveProfile(target.id, { handle });
+  }
+  return target;
+}
+route('PATCH', '/api/me/profile', async ({ user, body }) => {
+  await applyProfile(user, body);
+  if (body.name !== undefined) await store.setAuthName(user.name).catch(() => {});
   return { user };
 });
 route('GET', '/api/profiles/:uid', async ({ user, params }) => {
@@ -639,7 +646,8 @@ route('GET', '/api/games/:gid', async ({ user, params }) => {
 });
 route('PATCH', '/api/games/:gid', async ({ user, params, body }) => {
   const g = await mustGame(params.gid);
-  if (g.owner !== user.id) throw httpError(403, 'Only the game creator can change settings.');
+  if (g.owner !== user.id && !user.admin) throw httpError(403, 'Only the game creator can change settings.');
+  if (g.sandboxOf && !user.admin) throw httpError(403, 'Practice portfolio rules are fixed.');
   const oldCash = g.settings.startingCash, settings = cleanSettings(body, g.settings);
   if (g.sandboxOf) settings.privacy = 'private';
   // Starting cash can only change before anyone has traded.
@@ -654,7 +662,7 @@ route('PATCH', '/api/games/:gid', async ({ user, params, body }) => {
 });
 route('DELETE', '/api/games/:gid', async ({ user, params }) => {
   const g = await mustGame(params.gid);
-  if (g.owner !== user.id || g.sandboxOf) throw httpError(403, 'Cannot delete this game.');
+  if ((g.owner !== user.id || g.sandboxOf) && !user.admin) throw httpError(403, 'Cannot delete this game.');
   await store.deleteGame(g.id); return { ok: true };
 });
 route('POST', '/api/games/:gid/join', async ({ user, params, body }) => {
@@ -879,14 +887,12 @@ export const BADGES = [
   ['champion', '👑', 'Champion', 'Finished first in a game with 2+ players', c => c.wins >= 1],
   ['watchful', '🔔', 'Watchful', 'Set a price alert', c => c.alerts >= 1],
   ['social', '👋', 'Social', 'Added a friend', c => c.friends >= 1],
-  ['student', '📘', 'Student', 'Read 5 lessons', c => c.lessons >= 5],
-  ['scholar', '🎓', 'Scholar', 'Read every lesson', c => c.lessons >= LESSONS.length],
 ];
 async function badgeContext(user) {
   const games = await store.myGames(user.id);
   const pairs = (await Promise.all(games.map(async g => [g, await store.getPlayer(g.id, user.id)]))).filter(([, p]) => p);
   const c = { trades: 0, limitFills: 0, shorts: 0, options: 0, written: 0, strategies: 0, crypto: 0, maxPositions: 0, dividends: 0, bestGain: -Infinity, comeback: false, created: 0, joined: 0,
-    wins: (user.wonGames || []).length, alerts: (user.alerts || []).length, friends: (user.friends || []).length, lessons: (user.lessonsRead || []).filter(id => LESSONS.some(l => l.id === id)).length };
+    wins: (user.wonGames || []).length, alerts: (user.alerts || []).length, friends: (user.friends || []).length };
   for (const [g, p] of pairs) {
     const fills = p.history.filter(o => o.status === 'filled');
     c.trades += fills.length;
@@ -916,12 +922,6 @@ route('POST', '/api/badges/check', async ({ user }) => {
     await notify(user, fresh.map(b => ({ kind: 'badge', text: `Badge earned: ${b.icon} ${b.name}`, link: '#/profile' })));
   }
   return fresh;
-});
-route('POST', '/api/learn/:id', async ({ user, params }) => {
-  if (!LESSONS.some(l => l.id === params.id)) throw httpError(404, 'Lesson not found.');
-  user.lessonsRead = [...new Set([...(user.lessonsRead || []), params.id])];
-  await store.saveUser(user.id, { lessonsRead: user.lessonsRead });
-  return { read: user.lessonsRead };
 });
 
 // ---------- multi-leg strategies ----------
@@ -974,6 +974,70 @@ route('POST', '/api/games/:gid/strategy', async ({ user, params, body }) => {
   return { filled: true, net, fees, legs: plan.map(l => l.o) };
 });
 
+// ---------- admin ----------
+const ADMIN_HASH = '059a50ce956b7ec61527c7ecc0c55b5a009dc54ab4acddce8852b46baa2aba30';
+const sha256 = async t => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map(b => b.toString(16).padStart(2, '0')).join('');
+const mustAdmin = user => { if (!user.admin) throw httpError(403, 'Admin mode is off.'); };
+route('POST', '/api/admin/unlock', async ({ user, body }) => {
+  if (await sha256(String(body.password || '')) !== ADMIN_HASH) throw httpError(403, 'Wrong password.');
+  try { localStorage.setItem('bp_admin', user.id); } catch {}
+  user.admin = await store.isAdmin(user.id).catch(() => false);
+  return { admin: user.admin, uid: user.id, mode: store.mode };
+});
+route('POST', '/api/admin/lock', ({ user }) => { try { localStorage.removeItem('bp_admin'); } catch {} user.admin = false; return { ok: true }; });
+route('GET', '/api/admin/users', async ({ user }) => {
+  mustAdmin(user);
+  const list = await store.listProfiles();
+  return Promise.all(list.map(async pr => ({ ...pr, email: (await store.getUser(pr.id).catch(() => null))?.email || '' })));
+});
+route('PATCH', '/api/admin/users/:uid', async ({ user, params, body }) => {
+  mustAdmin(user);
+  const target = { id: params.uid, ...(await store.getUser(params.uid).catch(() => null)), ...(await store.getProfile(params.uid).catch(() => null)), id: params.uid };
+  if (body.removePicture) body.picture = '';
+  await applyProfile(target, body);
+  return { ok: true };
+});
+route('DELETE', '/api/admin/users/:uid', async ({ user, params }) => {
+  mustAdmin(user);
+  const uid = params.uid;
+  if (uid === user.id) throw httpError(400, 'Use Delete account for your own account.');
+  for (const g of await store.myGames(uid)) {
+    if (g.owner === uid) await store.deleteGame(g.id);
+    else await store.leave(g.id, uid).catch(() => {});
+  }
+  const pr = await store.getProfile(uid).catch(() => null);
+  if (pr?.handle) await store.releaseHandle(pr.handle);
+  await store.deleteUserDocs(uid);
+  return { ok: true };
+});
+route('GET', '/api/admin/games', async ({ user }) => {
+  mustAdmin(user);
+  const [games, profiles] = await Promise.all([store.listAllGames(), store.listProfiles()]);
+  const nameOf = id => profiles.find(p => p.id === id)?.name || 'Unknown';
+  return games.sort((a, b) => b.created - a.created).map(g => ({ id: g.id, name: g.settings.name, owner: g.owner, ownerName: nameOf(g.owner), players: g.members.length, practice: !!g.sandboxOf, privacy: g.settings.privacy, active: gameActive(g), created: g.created }));
+});
+route('GET', '/api/admin/games/:gid/players', async ({ user, params }) => {
+  mustAdmin(user);
+  const g = await mustGame(params.gid), players = await store.listPlayers(g.id), mk = await marks(players);
+  return players.map(p => ({ ...actor(p), cash: p.cash, equity: valuation(p, mk.quotes, mk.optq).equity, trades: p.history.filter(o => o.status === 'filled').length, positions: Object.keys(p.positions).length + Object.keys(p.options || {}).length }));
+});
+route('PATCH', '/api/admin/games/:gid/players/:uid', async ({ user, params, body }) => {
+  mustAdmin(user);
+  const g = await mustGame(params.gid), p = await store.getPlayer(g.id, params.uid);
+  if (!p) throw httpError(404, 'Player not found.');
+  if (body.reset) Object.assign(p, { cash: g.settings.startingCash, positions: {}, options: {}, unsettled: [], orders: [], history: [], snapshots: {}, tradesByDay: {} });
+  if (body.cash !== undefined) { const c = Number(body.cash); if (!isFinite(c)) throw httpError(400, 'Enter an amount.'); p.cash = c; }
+  await store.savePlayer(g.id, params.uid, p);
+  return { ok: true };
+});
+route('DELETE', '/api/admin/games/:gid/players/:uid', async ({ user, params }) => {
+  mustAdmin(user);
+  const g = await mustGame(params.gid);
+  if (g.owner === params.uid) throw httpError(400, 'Delete the game instead of removing its creator.');
+  await store.leave(g.id, params.uid); return { ok: true };
+});
+
+const PERMISSION_HELP = 'Firebase blocked this change. In the Firebase console, open Firestore Database → Rules, paste in the latest firestore.rules from the Bullpen GitHub repo, and click Publish.';
 export async function api(path, method = 'GET', body = {}) {
   const url = new URL(path, location.href);
   for (const r of routes) {
@@ -981,7 +1045,8 @@ export async function api(path, method = 'GET', body = {}) {
     if (!m) continue;
     const user = await loadMe();
     if (!user) throw httpError(401, 'Sign in required.');
-    return r.fn({ url, body, user, params: m.groups || {} });
+    try { return await r.fn({ url, body, user, params: m.groups || {} }); }
+    catch (e) { if (e.code === 'permission-denied' || /insufficient permissions/i.test(e.message)) throw httpError(403, PERMISSION_HELP); throw e; }
   }
   throw httpError(404, 'Not found');
 }
