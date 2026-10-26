@@ -15,6 +15,20 @@ service cloud.firestore {
       allow write: if request.auth.uid == uid;
     }
 
+    // @usernames: each name points at exactly one account.
+    match /handles/{handle} {
+      allow read: if signedIn();
+      allow create: if request.resource.data.uid == request.auth.uid;
+      allow update: if resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid;
+      allow delete: if resource.data.uid == request.auth.uid;
+    }
+
+    // Game invites and challenges: visible only to sender and recipient.
+    match /invites/{id} {
+      allow read, delete: if request.auth.uid == resource.data.to || request.auth.uid == resource.data.from;
+      allow create: if request.resource.data.from == request.auth.uid;
+    }
+
     match /games/{gid} {
       allow read: if signedIn();
       allow create: if signedIn()
@@ -33,6 +47,13 @@ service cloud.firestore {
         allow read: if request.auth.uid == get(game(gid)).data.owner;
         allow write: if request.auth.uid == getAfter(game(gid)).data.owner
           || request.auth.uid == get(game(gid)).data.owner;
+      }
+
+      // Activity feed: members post as themselves; authors or the owner can delete.
+      match /activity/{id} {
+        allow read: if signedIn();
+        allow create: if request.resource.data.userId == request.auth.uid && request.auth.uid in get(game(gid)).data.members;
+        allow delete: if request.auth.uid == resource.data.userId || request.auth.uid == get(game(gid)).data.owner;
       }
 
       match /players/{uid} {

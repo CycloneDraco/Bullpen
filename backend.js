@@ -2,6 +2,8 @@
 // store.js (Firebase or localStorage) and Finnhub for live prices.
 import CONFIG from './config.js';
 import { store } from './store.js';
+import { LESSONS } from './learn.js';
+import { CLASS_LESSONS } from './class-lessons.js';
 export { store };
 
 const FH = CONFIG.finnhubBase || 'https://finnhub.io/api/v1';
@@ -20,11 +22,20 @@ async function fh(path) {
   if (!r.ok) throw new Error('Price service error.');
   return r.json();
 }
+// Crypto trades around the clock, priced from Binance's USDT pairs.
+export const CRYPTO = { BTC: 'Bitcoin', ETH: 'Ethereum', SOL: 'Solana', XRP: 'XRP', BNB: 'BNB', DOGE: 'Dogecoin', ADA: 'Cardano', AVAX: 'Avalanche', LINK: 'Chainlink', DOT: 'Polkadot', LTC: 'Litecoin', SHIB: 'Shiba Inu' };
+export const isCrypto = s => /^[A-Z]+-USD$/.test(s || '') && !!CRYPTO[s.slice(0, -4)];
+export const tvSymbol = s => isCrypto(s) ? `BINANCE:${s.slice(0, -4)}USDT` : s;
+const openFor = s => isCrypto(s) || marketOpen();
+
 async function getMeta(sym) {
-  if (meta[sym]) return meta[sym];
+  if (meta[sym]?.v === 2) return meta[sym];
+  if (isCrypto(sym)) return meta[sym] = { v: 2, name: CRYPTO[sym.slice(0, -4)], exchange: 'Crypto', type: 'CRYPTO', industry: 'Crypto' };
   const p = await fh('/stock/profile2?symbol=' + encodeURIComponent(sym));
   // Finnhub only has company profiles for stocks; no profile means a fund.
-  meta[sym] = p.name ? { name: p.name, exchange: p.exchange, type: 'EQUITY' } : { name: sym, exchange: '', type: 'ETF' };
+  meta[sym] = p.name
+    ? { v: 2, name: p.name, exchange: p.exchange, type: 'EQUITY', industry: p.finnhubIndustry || 'Other', marketCap: p.marketCapitalization || 0, logo: p.logo || '' }
+    : { v: 2, name: meta[sym]?.name || sym, exchange: '', type: 'ETF', industry: 'Funds' };
   saveMeta(); return meta[sym];
 }
 async function getQuote(symbol) {
@@ -32,12 +43,13 @@ async function getQuote(symbol) {
   const c = quoteCache.get(symbol);
   if (c && Date.now() - c.t < 20000) return c.q;
   let q, m;
-  try { [q, m] = await Promise.all([fh('/quote?symbol=' + encodeURIComponent(symbol)), getMeta(symbol).catch(() => ({ name: symbol, type: 'EQUITY' }))]); }
+  try { [q, m] = await Promise.all([fh('/quote?symbol=' + encodeURIComponent(tvSymbol(symbol))), getMeta(symbol).catch(() => ({ name: symbol, type: 'EQUITY' }))]); }
   catch (e) { if (c) return c.q; throw e; }
   if (!q.c && !q.pc) throw new Error(`Unknown symbol ${symbol}`);
   const out = {
     symbol, name: m.name, price: q.c, prevClose: q.pc, change: q.d ?? 0, changePct: q.dp ?? 0,
     high: q.h, low: q.l, open: q.o, exchange: m.exchange, type: m.type, currency: 'USD', time: q.t * 1000,
+    industry: m.industry || '', marketCap: m.marketCap || 0, logo: m.logo || '',
   };
   quoteCache.set(symbol, { t: Date.now(), q: out });
   return out;
@@ -49,13 +61,29 @@ async function getQuotes(symbols) {
   return out;
 }
 async function search(q) {
+  const ql = q.trim().toLowerCase();
+  const coins = Object.entries(CRYPTO).filter(([k, n]) => k.toLowerCase().startsWith(ql) || n.toLowerCase().startsWith(ql) || (ql.length > 2 && 'crypto'.startsWith(ql)))
+    .map(([k, n]) => ({ symbol: `${k}-USD`, name: n, exchange: 'Crypto', type: 'Crypto' }));
   const j = await fh('/search?exchange=US&q=' + encodeURIComponent(q));
-  return (j.result || []).filter(x => !x.symbol.includes('.') && ['Common Stock', 'ETP', 'ADR', 'REIT'].includes(x.type)).slice(0, 8).map(x => {
+  return coins.slice(0, 4).concat(j.result || []).filter(x => !x.symbol.includes('.') && ['Common Stock', 'ETP', 'ADR', 'REIT'].includes(x.type)).slice(0, 8).map(x => {
     const type = x.type === 'ETP' ? 'ETF' : 'EQUITY';
     if (!meta[x.symbol]) { meta[x.symbol] = { name: x.description, exchange: '', type }; saveMeta(); }
-    return { symbol: x.symbol, name: x.description, exchange: '', type: type === 'ETF' ? 'ETF' : 'Stock' };
-  });
+    return x.exchange ? x : { symbol: x.symbol, name: x.description, exchange: '', type: type === 'ETF' ? 'ETF' : 'Stock' };
+  }).slice(0, 8);
 }
+// News: a stock's last week of headlines, or general market news.
+async function news(symbol) {
+  const to = nyDate(), from = nyDate(new Date(Date.now() - 7 * 864e5));
+  const list = symbol && !isCrypto(symbol) ? await fh(`/company-news?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${to}`) : await fh(`/news?category=${isCrypto(symbol) ? 'crypto' : 'general'}`);
+  return (Array.isArray(list) ? list : []).filter(n => n.headline && n.url).slice(0, 24).map(n => ({ id: n.id, headline: n.headline, summary: n.summary, source: n.source, url: n.url, image: n.image, time: n.datetime * 1000 }));
+}
+async function nextEarnings(symbol) {
+  if (isCrypto(symbol)) return null;
+  const j = await fh(`/calendar/earnings?symbol=${encodeURIComponent(symbol)}&from=${nyDate()}&to=${nyDate(new Date(Date.now() + 120 * 864e5))}`);
+  return (j.earningsCalendar || []).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+}
+// Screener universe: liquid US large caps and popular ETFs across every sector.
+export const UNIVERSE = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AVGO', 'ORCL', 'AMD', 'CRM', 'ADBE', 'INTC', 'NFLX', 'JPM', 'BAC', 'GS', 'V', 'MA', 'PYPL', 'BRK.B', 'UNH', 'JNJ', 'LLY', 'PFE', 'MRK', 'ABBV', 'WMT', 'COST', 'HD', 'MCD', 'NKE', 'SBUX', 'KO', 'PEP', 'PG', 'DIS', 'XOM', 'CVX', 'BA', 'CAT', 'GE', 'UPS', 'T', 'VZ', 'SPY', 'QQQ', 'IWM', 'DIA', 'GLD', 'TLT', 'XLF', 'XLE', 'ARKK'];
 
 // ---------- options (Black-Scholes on the live price + real 3-month volatility) ----------
 // Finnhub's free plan has no option chains, so contracts are priced the way the model
@@ -155,6 +183,7 @@ const DEFAULT_SETTINGS = {
   minStockPrice: 0, minShortPrice: 5, maxPositionPct: 100, dailyTradeLimit: 0,
   allowEtf: true, allowMutualFunds: false,
   allowOptions: true, allowOptionWriting: false, optionCommission: 0,
+  allowCrypto: true, payDividends: true, maxPlayers: 0,
 };
 function cleanSettings(input, base = DEFAULT_SETTINGS) {
   const s = { ...DEFAULT_SETTINGS, ...base };
@@ -189,7 +218,7 @@ function valuation(p, quotes, optq = {}) {
     const value = pos.qty * price;
     if (pos.qty > 0) longValue += value; else shortValue += -value;
     const gain = pos.qty > 0 ? (price - pos.avg) * pos.qty : (pos.avg - price) * -pos.qty;
-    return { symbol: sym, name: q?.name || sym, qty: pos.qty, avg: pos.avg, price, value, gain, gainPct: (gain / Math.abs(pos.avg * pos.qty)) * 100, dayChange: (q?.change || 0) * pos.qty, dayChangePct: q?.changePct || 0 };
+    return { symbol: sym, name: q?.name || sym, qty: pos.qty, avg: pos.avg, price, value, gain, gainPct: (gain / Math.abs(pos.avg * pos.qty)) * 100, dayChange: (q?.change || 0) * pos.qty, dayChangePct: q?.changePct || 0, type: q?.type || (isCrypto(sym) ? 'CRYPTO' : 'EQUITY'), industry: q?.industry || '', logo: q?.logo || '' };
   });
   let optCollateral = 0;
   const options = Object.entries(p.options || {}).map(([key, pos]) => {
@@ -215,8 +244,13 @@ const commissionFor = (g, amount) => g.settings.commissionType === 'flat' ? g.se
 function validateOrder(p, g, o, q, v) {
   const s = g.settings;
   if (!gameActive(g)) return 'This game is not active.';
-  if (!(o.qty > 0) || !Number.isInteger(o.qty)) return 'Quantity must be a whole number above zero.';
+  const coin = isCrypto(o.symbol);
+  if (!(o.qty > 0) || (!coin && !Number.isInteger(o.qty))) return 'Quantity must be a whole number above zero.';
   if (q.type === 'ETF' && !s.allowEtf) return 'ETFs are not allowed in this game.';
+  if (coin) {
+    if (!s.allowCrypto) return 'Crypto is not allowed in this game.';
+    if (o.action === 'short' || o.action === 'cover') return 'Crypto can’t be shorted.';
+  }
   if (o.action === 'buy' && q.price < s.minStockPrice) return `Stocks under $${s.minStockPrice} cannot be bought in this game.`;
   if (o.action === 'short') {
     if (!s.allowShort) return 'Short selling is disabled for this game.';
@@ -226,7 +260,7 @@ function validateOrder(p, g, o, q, v) {
   if (o.type === 'stop' && !s.allowStop) return 'Stop orders are disabled.';
   if (o.type === 'trailing' && !s.allowTrailing) return 'Trailing stop orders are disabled.';
   const pos = p.positions[o.symbol];
-  if (o.action === 'sell' && (!pos || pos.qty < o.qty)) return `You only hold ${pos?.qty > 0 ? pos.qty : 0} shares.`;
+  if (o.action === 'sell' && (!pos || pos.qty < o.qty - 1e-9)) return `You only hold ${pos?.qty > 0 ? +pos.qty.toFixed(6) : 0} ${coin ? 'coins' : 'shares'}.`;
   if (o.action === 'cover' && (!pos || -pos.qty < o.qty)) return `You are only short ${pos?.qty < 0 ? -pos.qty : 0} shares.`;
   if (o.action === 'buy' && pos?.qty < 0) return 'Cover your short position before buying.';
   if (o.action === 'short' && pos?.qty > 0) return 'Sell your long position before shorting.';
@@ -243,19 +277,42 @@ function validateOrder(p, g, o, q, v) {
 function fill(p, g, o, price) {
   const amount = o.qty * price, fee = commissionFor(g, amount);
   const pos = p.positions[o.symbol] || { qty: 0, avg: 0 };
+  if (o.action === 'sell') o.realized = (price - pos.avg) * o.qty - fee;
+  if (o.action === 'cover') o.realized = (pos.avg - price) * o.qty - fee;
   if (o.action === 'buy') { pos.avg = (pos.avg * pos.qty + amount) / (pos.qty + o.qty); pos.qty += o.qty; p.cash -= amount + fee; }
   if (o.action === 'sell') { pos.qty -= o.qty; p.cash += amount - fee; }
   if (o.action === 'short') { pos.avg = (pos.avg * -pos.qty + amount) / (-pos.qty + o.qty); pos.qty -= o.qty; p.cash += amount - fee; }
   if (o.action === 'cover') { pos.qty += o.qty; p.cash -= amount + fee; }
-  if (pos.qty === 0) delete p.positions[o.symbol]; else p.positions[o.symbol] = pos;
-  finishFill(p, o, price, fee);
+  if (Math.abs(pos.qty) < 1e-9) delete p.positions[o.symbol]; else p.positions[o.symbol] = pos;
+  finishFill(p, o, price, fee, g);
 }
-function finishFill(p, o, price, fee) {
+function finishFill(p, o, price, fee, g) {
   Object.assign(o, { status: 'filled', filledAt: Date.now(), fillPrice: price, fee });
   p.tradesByDay[nyDate()] = (p.tradesByDay[nyDate()] || 0) + 1;
   p.history.unshift({ ...o });
   p.orders = p.orders.filter(x => x.id !== o.id);
+  p.maxPositions = Math.max(p.maxPositions || 0, Object.keys(p.positions).length + Object.keys(p.options || {}).length);
+  if (g) queueTradeEvent(g, p, o);
 }
+
+// ---------- game activity feed ----------
+const pendingEvents = [];
+const VERB = { buy: 'bought', sell: 'sold', short: 'shorted', cover: 'covered', bto: 'bought', stc: 'sold', sto: 'wrote', btc: 'bought back' };
+const actor = p => ({ userId: p.userId, name: p.name, picture: p.picture || '', color: p.color || '' });
+function queueTradeEvent(g, p, o) {
+  if (g.sandboxOf) return;
+  if (o.strategyId && pendingEvents.some(e => e.item.strategyId === o.strategyId)) return;
+  const what = o.asset === 'option' ? `${o.qty} × ${o.desc}` : `${+(+o.qty).toFixed(6)} ${o.symbol}`;
+  const text = !g.settings.showPortfolios ? 'made a trade'
+    : o.strategyId ? `opened a ${o.strategy || 'strategy'} on ${o.symbol}`
+    : `${VERB[o.action] || o.action} ${what} at ${o.fillPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}`;
+  pendingEvents.push({ gid: g.id, item: { id: rid(), type: 'trade', ...actor(p), text, strategyId: o.strategyId || null, created: Date.now() } });
+}
+async function flushEvents() {
+  const list = pendingEvents.splice(0);
+  await Promise.all(list.map(e => store.addActivity(e.gid, e.item).catch(() => {})));
+}
+async function savePlayer(g, p) { await store.savePlayer(g.id, p.userId, p); await flushEvents(); }
 
 // ---------- option orders ----------
 const optionFee = (g, qty, amount) => commissionFor(g, amount) + qty * (g.settings.optionCommission || 0);
@@ -291,11 +348,11 @@ function fillOption(p, g, o, price) {
   const amount = o.qty * 100 * price, fee = optionFee(g, o.qty, amount);
   const pos = p.options[o.key] || { qty: 0, avg: 0 };
   if (o.action === 'bto') { pos.avg = (pos.avg * pos.qty + price * o.qty) / (pos.qty + o.qty); pos.qty += o.qty; p.cash -= amount + fee; }
-  if (o.action === 'stc') { pos.qty -= o.qty; p.cash += amount - fee; }
+  if (o.action === 'stc') { o.realized = (price - pos.avg) * o.qty * 100 - fee; pos.qty -= o.qty; p.cash += amount - fee; }
   if (o.action === 'sto') { pos.avg = (pos.avg * -pos.qty + price * o.qty) / (-pos.qty + o.qty); pos.qty -= o.qty; p.cash += amount - fee; }
-  if (o.action === 'btc') { pos.qty += o.qty; p.cash -= amount + fee; }
+  if (o.action === 'btc') { o.realized = (pos.avg - price) * o.qty * 100 - fee; pos.qty += o.qty; p.cash -= amount + fee; }
   if (pos.qty === 0) delete p.options[o.key]; else p.options[o.key] = pos;
-  finishFill(p, o, price, fee);
+  finishFill(p, o, price, fee, g);
 }
 // Expired contracts settle in cash at intrinsic value.
 function settleExpired(p, quotes) {
@@ -305,7 +362,7 @@ function settleExpired(p, quotes) {
     const intrinsic = r2(Math.max(0, o.type === 'C' ? S - o.strike : o.strike - S));
     p.cash += pos.qty * 100 * intrinsic;
     const status = intrinsic > 0 ? 'exercised' : 'expired';
-    p.history.unshift({ id: rid(), asset: 'option', key, desc: optionLabel(o), symbol: o.symbol, action: pos.qty > 0 ? 'stc' : 'btc', qty: Math.abs(pos.qty), type: 'market', status, created: Date.now(), filledAt: Date.now(), fillPrice: intrinsic, fee: 0 });
+    p.history.unshift({ id: rid(), asset: 'option', key, desc: optionLabel(o), symbol: o.symbol, action: pos.qty > 0 ? 'stc' : 'btc', qty: Math.abs(pos.qty), type: 'market', status, created: Date.now(), filledAt: Date.now(), fillPrice: intrinsic, fee: 0, realized: (intrinsic - pos.avg) * pos.qty * 100 });
     delete p.options[key];
   }
 }
@@ -349,7 +406,7 @@ async function processOrders(p, g) {
       if (err) closeOrder(p, o, 'cancelled', err); else fillOption(p, g, o, optionFillPrice(o, oq));
       continue;
     }
-    const q = mk.quotes[o.symbol]; if (!q || !open) continue;
+    const q = mk.quotes[o.symbol]; if (!q || !(open || isCrypto(o.symbol))) continue;
     if (shouldFill(o, q.price)) {
       const err = validateOrder(p, g, { ...o }, q, valuation(p, mk.quotes, mk.optq));
       if (err) closeOrder(p, o, 'cancelled', err); else fill(p, g, o, fillPrice(o, q.price));
@@ -370,17 +427,41 @@ function accrueInterest(p, g) {
   p.lastAccrual = today;
 }
 
+// Daily dividends from each stock's real indicated annual yield (shorts pay them).
+async function accrueDividends(p, g, quotes) {
+  const today = nyDate();
+  if (!g.settings.payDividends) return;
+  if (!p.lastDiv) { p.lastDiv = today; return; }
+  const days = Math.min(30, Math.round((new Date(today) - new Date(p.lastDiv)) / 864e5));
+  if (days <= 0) return;
+  let total = 0;
+  for (const [sym, pos] of Object.entries(p.positions)) {
+    if (isCrypto(sym) || !quotes[sym]) continue;
+    const { div } = await getVol(sym);
+    total += pos.qty * quotes[sym].price * div / 365 * days;
+  }
+  p.lastDiv = today;
+  if (Math.abs(total) < 0.01) return;
+  p.cash += total; p.divPaid = (p.divPaid || 0) + total;
+  p.history.unshift({ id: rid(), asset: 'dividend', symbol: 'Dividends', action: total > 0 ? 'received' : 'paid', qty: days, type: 'dividend', status: 'dividend', created: Date.now(), filledAt: Date.now(), fillPrice: total, fee: 0 });
+}
+
 async function portfolioView(p, g, own) {
   if (own) { accrueInterest(p, g); await processOrders(p, g); }
-  const mk = await marks([p]);
+  const mk = await marks([p, own ? { positions: { SPY: {} } } : {}]);
+  if (own) await accrueDividends(p, g, mk.quotes);
   const v = valuation(p, mk.quotes, mk.optq);
-  if (own) { p.snapshots[nyDate()] = Math.round(v.equity * 100) / 100; await store.savePlayer(g.id, p.userId, p); }
+  if (own) {
+    p.snapshots[nyDate()] = Math.round(v.equity * 100) / 100;
+    if (mk.quotes.SPY) (p.bench ||= {})[nyDate()] = mk.quotes.SPY.price;
+    await savePlayer(g, p);
+  }
   const start = g.settings.startingCash;
   return {
     playerId: p.userId, gameId: g.id, cash: p.cash, ...v, buyingPower: buyingPower(p, g, v),
     totalGain: v.equity - start, totalGainPct: ((v.equity - start) / start) * 100,
     dayChange: v.holdings.reduce((a, h) => a + h.dayChange, 0),
-    orders: own ? p.orders : [], history: p.history.slice(0, 200), snapshots: p.snapshots, marketOpen: marketOpen(),
+    orders: own ? p.orders : [], history: p.history.slice(0, 300), snapshots: p.snapshots, bench: p.bench || {}, divPaid: p.divPaid || 0, marketOpen: marketOpen(),
   };
 }
 
@@ -423,7 +504,7 @@ export async function signInEmail(email, password) { await store.signInEmail(ema
 export async function signUpEmail(name, email, password) { await store.signUpEmail(name, email, password); me = null; return loadMe(); }
 export const resetPassword = email => store.resetPassword(email);
 export async function signOut() { await store.signOut(); me = null; }
-const publicProfile = u => ({ name: u.name, picture: u.picture || '', bio: u.bio || '', color: u.color || '', joined: u.joined || Date.now() });
+const publicProfile = u => ({ name: u.name, picture: u.picture || '', bio: u.bio || '', color: u.color || '', joined: u.joined || Date.now(), handle: u.handle || '', badges: u.badges || {} });
 
 // Account security actions go straight to the auth provider.
 export const account = {
@@ -439,6 +520,8 @@ export const account = {
       if (g.owner === user.id) await store.deleteGame(g.id);
       else await store.leave(g.id, user.id).catch(() => {});
     }
+    if (user.handle) await store.releaseHandle(user.handle);
+    for (const inv of await store.listInvites(user.id).catch(() => [])) await store.deleteInvite(inv.id).catch(() => {});
     await store.deleteUserDocs(user.id);
     await store.deleteAuthUser();
     me = null;
@@ -454,11 +537,20 @@ route('GET', '/api/me', ({ user }) => ({ user }));
 route('PATCH', '/api/me/profile', async ({ user, body }) => {
   const name = String(body.name ?? user.name).trim().slice(0, 40);
   if (!name) throw httpError(400, 'Your display name can’t be empty.');
-  const picture = body.picture === undefined ? user.picture : String(body.picture || '');
+  const picture = body.picture === undefined ? user.picture || '' : String(body.picture || '');
   if (picture && !/^(data:image\/(jpeg|png|webp);base64,|https:\/\/)/.test(picture)) throw httpError(400, 'That picture format isn’t supported.');
   if (picture.length > 150000) throw httpError(400, 'That picture is too large.');
+  if (body.handle !== undefined) {
+    const handle = String(body.handle).trim().toLowerCase().replace(/^@/, '');
+    if (handle && !/^[a-z0-9_]{3,20}$/.test(handle)) throw httpError(400, 'Usernames are 3–20 letters, numbers or underscores.');
+    if (handle !== (user.handle || '')) {
+      if (handle) await store.claimHandle(user.id, handle, user.handle);
+      else if (user.handle) await store.releaseHandle(user.handle);
+      user.handle = handle;
+    }
+  }
   Object.assign(user, { name, picture, bio: String(body.bio ?? user.bio ?? '').slice(0, 160), color: /^#[0-9a-f]{6}$/i.test(body.color) ? body.color : user.color || '' });
-  await store.saveUser(user.id, { name: user.name, picture: user.picture, bio: user.bio, color: user.color });
+  await store.saveUser(user.id, { name: user.name, picture: user.picture, bio: user.bio, color: user.color, handle: user.handle || '' });
   await store.saveProfile(user.id, publicProfile(user)).catch(() => {});
   if (body.name !== undefined) await store.setAuthName(name).catch(() => {});
   // Rankings read names and pictures from each game's player record.
@@ -490,7 +582,7 @@ route('PATCH', '/api/me/prefs', async ({ user, body }) => { user.prefs = { ...us
 
 route('GET', '/api/quote', ({ url }) => getQuotes((url.searchParams.get('symbols') || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 40)));
 route('GET', '/api/search', ({ url }) => search(url.searchParams.get('q') || ''));
-route('GET', '/api/market', async () => ({ open: marketOpen(), indices: await getQuotes(['SPY', 'DIA', 'QQQ', 'IWM', 'GLD']), movers: await getQuotes(['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM']) }));
+route('GET', '/api/market', async () => ({ open: marketOpen(), indices: await getQuotes(['SPY', 'DIA', 'QQQ', 'IWM', 'BTC-USD']), movers: await getQuotes(['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM']) }));
 
 route('GET', '/api/options/:sym', async ({ url, params }) => {
   const sym = params.sym.toUpperCase(), u = await getQuote(sym), { vol, div } = await getVol(sym);
@@ -518,12 +610,18 @@ route('GET', '/api/games', async ({ user }) => {
 route('POST', '/api/games', async ({ user, body }) => {
   const g = { id: rid(), owner: user.id, created: Date.now(), members: [user.id], hasPassword: !!body.password, settings: cleanSettings(body) };
   await store.createGame(g, body.password || '', newPlayer(g, user));
+  await store.addActivity(g.id, { id: rid(), type: 'join', ...actor({ ...user, userId: user.id }), text: 'created the game', created: Date.now() }).catch(() => {});
   return gamePublic(g, user);
 });
 route('GET', '/api/games/:gid', async ({ user, params }) => {
   const g = await mustGame(params.gid);
   if (g.sandboxOf && g.sandboxOf !== user.id) throw httpError(404, 'Game not found.');
-  return { game: await gamePublic(g, user), rankings: await rankings(g) };
+  const ranks = await rankings(g);
+  // A finished game with 2+ players crowns its leader.
+  if (g.settings.endDate && nyDate() > g.settings.endDate && ranks.length >= 2 && ranks[0].userId === user.id && !(user.wonGames || []).includes(g.id)) {
+    user.wonGames = [...(user.wonGames || []), g.id]; await store.saveUser(user.id, { wonGames: user.wonGames });
+  }
+  return { game: await gamePublic(g, user), rankings: ranks, challenge: !!g.challenge };
 });
 route('PATCH', '/api/games/:gid', async ({ user, params, body }) => {
   const g = await mustGame(params.gid);
@@ -551,7 +649,10 @@ route('POST', '/api/games/:gid/join', async ({ user, params, body }) => {
   if (g.members.includes(user.id)) return { ok: true };
   if (!g.settings.allowLateEntry && nyDate() > g.settings.startDate) throw httpError(403, 'This game does not allow late entry.');
   if (g.settings.endDate && nyDate() > g.settings.endDate) throw httpError(403, 'This game has ended.');
-  await store.join(g.id, newPlayer(g, user), body.password); return { ok: true };
+  if (g.settings.maxPlayers && g.members.length >= g.settings.maxPlayers) throw httpError(403, 'This game is full.');
+  await store.join(g.id, newPlayer(g, user), body.password);
+  await store.addActivity(g.id, { id: rid(), type: 'join', ...actor(user.id ? { ...user, userId: user.id } : user), text: 'joined the game', created: Date.now() }).catch(() => {});
+  return { ok: true };
 });
 route('POST', '/api/games/:gid/leave', async ({ user, params }) => {
   const g = await mustGame(params.gid);
@@ -580,7 +681,7 @@ route('POST', '/api/games/:gid/orders', async ({ user, params, body }) => {
   if (!p) throw httpError(404, 'Join this game first.');
   if (body.asset === 'option') return placeOptionOrder(g, p, user, body);
   const o = {
-    id: rid(), symbol: String(body.symbol || '').toUpperCase(), action: body.action, qty: Number(body.qty),
+    id: rid(), symbol: String(body.symbol || '').toUpperCase(), action: body.action, qty: Math.round(Number(body.qty) * 1e6) / 1e6,
     type: body.type || 'market', duration: body.duration === 'gtc' ? 'gtc' : 'day', created: Date.now(), day: nyDate(), status: 'open', trailUnit: body.trailUnit === '$' ? '$' : '%',
   };
   if (o.type === 'limit') o.limitPrice = Number(body.limitPrice);
@@ -593,9 +694,9 @@ route('POST', '/api/games/:gid/orders', async ({ user, params, body }) => {
   const mk = await marks([p]);
   const err = validateOrder(p, g, o, q, valuation(p, mk.quotes, mk.optq)); if (err) throw httpError(400, err);
   p.orders.push(o);
-  if (marketOpen() && shouldFill(o, q.price)) fill(p, g, o, fillPrice(o, q.price));
-  await store.savePlayer(g.id, user.id, p);
-  return { order: o, filled: o.status === 'filled', marketOpen: marketOpen() };
+  if (openFor(o.symbol) && shouldFill(o, q.price)) fill(p, g, o, fillPrice(o, q.price));
+  await savePlayer(g, p);
+  return { order: o, filled: o.status === 'filled', marketOpen: openFor(o.symbol) };
 });
 async function placeOptionOrder(g, p, user, body) {
   const c = parseKey(body.key);
@@ -610,7 +711,7 @@ async function placeOptionOrder(g, p, user, body) {
   const err = validateOptionOrder(p, g, o, oq, valuation(p, mk.quotes, mk.optq)); if (err) throw httpError(400, err);
   p.orders.push(o);
   if (marketOpen() && shouldFillOption(o, oq)) fillOption(p, g, o, optionFillPrice(o, oq));
-  await store.savePlayer(g.id, user.id, p);
+  await savePlayer(g, p);
   return { order: o, filled: o.status === 'filled', marketOpen: marketOpen() };
 }
 route('DELETE', '/api/games/:gid/orders/:oid', async ({ user, params }) => {
@@ -618,6 +719,249 @@ route('DELETE', '/api/games/:gid/orders/:oid', async ({ user, params }) => {
   if (!o) throw httpError(404, 'Order not found.');
   closeOrder(p, o, 'cancelled'); await store.savePlayer(params.gid, user.id, p);
   return { ok: true };
+});
+
+// ---------- news, earnings ----------
+route('GET', '/api/news', ({ url }) => news((url.searchParams.get('symbol') || '').toUpperCase()));
+route('GET', '/api/earnings', ({ url }) => nextEarnings((url.searchParams.get('symbol') || '').toUpperCase()));
+route('GET', '/api/universe', () => UNIVERSE);
+
+// ---------- notifications & price alerts ----------
+function notify(user, items) {
+  user.notifications = [...items.map(n => ({ id: rid(), read: false, created: Date.now(), ...n })), ...(user.notifications || [])].slice(0, 50);
+  return store.saveUser(user.id, { notifications: user.notifications });
+}
+route('GET', '/api/notifications', async ({ user }) => ({ items: user.notifications || [], invites: await store.listInvites(user.id).catch(() => []) }));
+route('POST', '/api/notifications/read', async ({ user }) => { (user.notifications || []).forEach(n => n.read = true); await store.saveUser(user.id, { notifications: user.notifications || [] }); return { ok: true }; });
+route('GET', '/api/alerts', async ({ user }) => { const alerts = user.alerts || []; return { alerts, quotes: await getQuotes(alerts.map(a => a.symbol)) }; });
+route('POST', '/api/alerts', async ({ user, body }) => {
+  const a = { id: rid(), symbol: String(body.symbol || '').toUpperCase(), op: body.op, value: Number(body.value), created: Date.now(), triggered: null };
+  if (!['above', 'below', 'up', 'down'].includes(a.op)) throw httpError(400, 'Choose when the alert should fire.');
+  if (!(a.value > 0)) throw httpError(400, 'Enter a price or percentage above zero.');
+  try { a.startPrice = (await getQuote(a.symbol)).price; } catch { throw httpError(400, `Couldn't find ${a.symbol}.`); }
+  user.alerts = [a, ...(user.alerts || [])].slice(0, 50);
+  await store.saveUser(user.id, { alerts: user.alerts });
+  return a;
+});
+route('DELETE', '/api/alerts/:id', async ({ user, params }) => { user.alerts = (user.alerts || []).filter(a => a.id !== params.id); await store.saveUser(user.id, { alerts: user.alerts }); return { ok: true }; });
+const ALERT_TEXT = { above: 'rose above', below: 'fell below', up: 'is up', down: 'is down' };
+export async function checkAlerts() {
+  const user = me; if (!user) return [];
+  const live = (user.alerts || []).filter(a => !a.triggered); if (!live.length) return [];
+  const quotes = await getQuotes(live.map(a => a.symbol)), hits = [];
+  for (const a of live) {
+    const q = quotes[a.symbol]; if (!q) continue;
+    const hit = a.op === 'above' ? q.price >= a.value : a.op === 'below' ? q.price <= a.value : a.op === 'up' ? q.changePct >= a.value : q.changePct <= -a.value;
+    if (!hit) continue;
+    Object.assign(a, { triggered: Date.now(), hitPrice: q.price });
+    hits.push({ kind: 'alert', text: `${a.symbol} ${ALERT_TEXT[a.op]} ${a.op === 'up' || a.op === 'down' ? a.value + '% today' : '$' + a.value} (now $${q.price.toFixed(2)})`, link: `#/research?symbol=${encodeURIComponent(a.symbol)}` });
+  }
+  if (hits.length) { await store.saveUser(user.id, { alerts: user.alerts }); await notify(user, hits); }
+  return hits;
+}
+
+// ---------- game activity & comments ----------
+route('GET', '/api/games/:gid/activity', async ({ params }) => store.listActivity(params.gid));
+route('POST', '/api/games/:gid/activity', async ({ user, params, body }) => {
+  const g = await mustGame(params.gid);
+  if (!g.members.includes(user.id)) throw httpError(403, 'Join the game to comment.');
+  const text = String(body.text || '').trim().slice(0, 500);
+  if (!text) throw httpError(400, 'Write something first.');
+  const item = { id: rid(), type: 'comment', ...actor({ ...user, userId: user.id }), text, replyTo: body.replyTo || null, created: Date.now() };
+  await store.addActivity(g.id, item); return item;
+});
+route('DELETE', '/api/games/:gid/activity/:id', async ({ params }) => { await store.deleteActivity(params.gid, params.id); return { ok: true }; });
+
+// ---------- friends, invites, challenges ----------
+route('GET', '/api/friends', async ({ user }) => {
+  const list = await Promise.all((user.friends || []).map(async uid => ({ id: uid, ...(await store.getProfile(uid).catch(() => null) || { name: 'Unknown player' }) })));
+  return list;
+});
+route('POST', '/api/friends', async ({ user, body }) => {
+  const handle = String(body.handle || '').trim().toLowerCase().replace(/^@/, '');
+  const uid = handle && await store.lookupHandle(handle);
+  if (!uid) throw httpError(404, `No one has the username @${handle || '…'}.`);
+  if (uid === user.id) throw httpError(400, 'That’s you!');
+  user.friends = [...new Set([...(user.friends || []), uid])];
+  await store.saveUser(user.id, { friends: user.friends });
+  return { id: uid };
+});
+route('DELETE', '/api/friends/:uid', async ({ user, params }) => { user.friends = (user.friends || []).filter(f => f !== params.uid); await store.saveUser(user.id, { friends: user.friends }); return { ok: true }; });
+async function invite(user, to, g, kind) {
+  const inv = { id: rid(), to, from: user.id, fromName: user.name, fromPicture: user.picture || '', fromColor: user.color || '', gameId: g.id, gameName: g.settings.name, kind, created: Date.now(), password: g.owner === user.id && g.hasPassword ? await store.getSecret(g.id) : '' };
+  await store.sendInvite(inv); return inv;
+}
+route('POST', '/api/invites', async ({ user, body }) => {
+  const g = await mustGame(body.gameId);
+  if (!g.members.includes(user.id) || g.sandboxOf) throw httpError(403, 'You can only invite people to games you’re in.');
+  if (g.members.includes(body.to)) throw httpError(400, 'They’re already in this game.');
+  await invite(user, body.to, g, 'game'); return { ok: true };
+});
+route('POST', '/api/invites/:id/accept', async ({ user, params }) => {
+  const inv = await store.getInvite(params.id);
+  if (!inv || inv.to !== user.id) throw httpError(404, 'Invite not found.');
+  const g = await mustGame(inv.gameId);
+  if (!g.members.includes(user.id)) {
+    if (g.settings.maxPlayers && g.members.length >= g.settings.maxPlayers) throw httpError(403, 'This game is full.');
+    await store.join(g.id, newPlayer(g, user), inv.password);
+    await store.addActivity(g.id, { id: rid(), type: 'join', ...actor({ ...user, userId: user.id }), text: inv.kind === 'challenge' ? 'accepted the challenge' : 'joined the game', created: Date.now() }).catch(() => {});
+  }
+  await store.deleteInvite(inv.id);
+  return { gameId: g.id };
+});
+route('DELETE', '/api/invites/:id', async ({ params }) => { await store.deleteInvite(params.id); return { ok: true }; });
+route('POST', '/api/challenges', async ({ user, body }) => {
+  const friend = await store.getProfile(body.to).catch(() => null);
+  if (!friend) throw httpError(404, 'Player not found.');
+  const days = Math.min(90, Math.max(1, Number(body.days) || 7));
+  const end = nyDate(new Date(Date.now() + days * 864e5));
+  const password = rid().slice(0, 10);
+  const g = { id: rid(), owner: user.id, created: Date.now(), members: [user.id], hasPassword: true, challenge: true,
+    settings: cleanSettings({ name: `${user.name.split(' ')[0]} vs ${friend.name.split(' ')[0]}`, description: `${days}-day head-to-head challenge`, privacy: 'private', startDate: nyDate(), endDate: end, startingCash: Number(body.startingCash) || 100000, maxPlayers: 2, allowOptions: body.allowOptions !== false, allowCrypto: body.allowCrypto !== false, allowLateEntry: true }) };
+  await store.createGame(g, password, newPlayer(g, user));
+  await store.addActivity(g.id, { id: rid(), type: 'join', ...actor({ ...user, userId: user.id }), text: `challenged ${friend.name} to ${days} days of trading`, created: Date.now() }).catch(() => {});
+  await invite(user, body.to, g, 'challenge');
+  return gamePublic(g, user);
+});
+
+// ---------- global leaderboard ----------
+let board = null;
+route('GET', '/api/leaderboard', async () => {
+  if (board && Date.now() - board.t < 300000) return board.rows;
+  const games = (await store.publicGames()).sort((a, b) => b.created - a.created).slice(0, 25);
+  const pairs = (await Promise.all(games.map(async g => (await store.listPlayers(g.id)).map(p => [g, p])))).flat();
+  const mk = await marks(pairs.map(([, p]) => p));
+  const rows = pairs.map(([g, p]) => {
+    const v = valuation(p, mk.quotes, mk.optq), start = g.settings.startingCash;
+    return { ...actor(p), gameId: g.id, game: g.settings.name, equity: v.equity, gainPct: (v.equity - start) / start * 100, trades: p.history.filter(o => o.status === 'filled').length };
+  }).filter(r => r.trades > 0).sort((a, b) => b.gainPct - a.gainPct).slice(0, 50).map((r, i) => ({ ...r, rank: i + 1 }));
+  board = { t: Date.now(), rows };
+  return rows;
+});
+
+// ---------- achievements ----------
+export const BADGES = [
+  ['first_trade', '🎯', 'First trade', 'Made your first trade', c => c.trades >= 1],
+  ['ten_trades', '⚡', 'Active trader', 'Made 10 trades', c => c.trades >= 10],
+  ['hundred_trades', '🏛️', 'Market maker', 'Made 100 trades', c => c.trades >= 100],
+  ['limit_order', '⏳', 'Patience pays', 'Filled a limit order', c => c.limitFills >= 1],
+  ['short_seller', '🐻', 'Short seller', 'Shorted a stock', c => c.shorts >= 1],
+  ['options_rookie', '🎟️', 'Options rookie', 'Traded your first option', c => c.options >= 1],
+  ['premium', '💵', 'Premium collector', 'Wrote (sold to open) an option', c => c.written >= 1],
+  ['strategist', '♟️', 'Strategist', 'Placed a multi-leg strategy', c => c.strategies >= 1],
+  ['crypto', '🪙', 'Crypto curious', 'Bought crypto', c => c.crypto >= 1],
+  ['diversified', '🧺', 'Diversified', 'Held 10 positions at once', c => c.maxPositions >= 10],
+  ['income', '💧', 'Income investor', 'Earned dividends', c => c.dividends > 0],
+  ['up5', '📈', 'In the green', 'Up 5% in a game', c => c.bestGain >= 5],
+  ['up10', '🚀', 'Double digits', 'Up 10% in a game', c => c.bestGain >= 10],
+  ['up25', '🏆', 'Market beater', 'Up 25% in a game', c => c.bestGain >= 25],
+  ['comeback', '🔥', 'Comeback kid', 'Recovered from a 20% drawdown', c => c.comeback],
+  ['commissioner', '📋', 'Commissioner', 'Created a game', c => c.created >= 1],
+  ['team_player', '🤝', 'Team player', 'Joined someone else’s game', c => c.joined >= 1],
+  ['champion', '👑', 'Champion', 'Finished first in a game with 2+ players', c => c.wins >= 1],
+  ['watchful', '🔔', 'Watchful', 'Set a price alert', c => c.alerts >= 1],
+  ['social', '👋', 'Social', 'Added a friend', c => c.friends >= 1],
+  ['student', '📘', 'Student', 'Read 5 lessons', c => c.lessons >= 5],
+  ['scholar', '🎓', 'Scholar', 'Read every lesson', c => c.lessons >= LESSONS.length],
+];
+async function badgeContext(user) {
+  const games = await store.myGames(user.id);
+  const pairs = (await Promise.all(games.map(async g => [g, await store.getPlayer(g.id, user.id)]))).filter(([, p]) => p);
+  const c = { trades: 0, limitFills: 0, shorts: 0, options: 0, written: 0, strategies: 0, crypto: 0, maxPositions: 0, dividends: 0, bestGain: -Infinity, comeback: false, created: 0, joined: 0,
+    wins: (user.wonGames || []).length, alerts: (user.alerts || []).length, friends: (user.friends || []).length, lessons: (user.lessonsRead || []).filter(id => LESSONS.some(l => l.id === id)).length };
+  for (const [g, p] of pairs) {
+    const fills = p.history.filter(o => o.status === 'filled');
+    c.trades += fills.length;
+    c.limitFills += fills.filter(o => o.type === 'limit').length;
+    c.shorts += fills.filter(o => o.action === 'short').length;
+    c.options += fills.filter(o => o.asset === 'option').length;
+    c.written += fills.filter(o => o.action === 'sto').length;
+    c.strategies += new Set(fills.filter(o => o.strategyId).map(o => o.strategyId)).size;
+    c.crypto += fills.filter(o => isCrypto(o.symbol) && o.action === 'buy').length;
+    c.maxPositions = Math.max(c.maxPositions, p.maxPositions || 0);
+    c.dividends += Math.max(0, p.divPaid || 0);
+    const start = g.settings.startingCash, vals = Object.entries(p.snapshots).sort().map(([, v]) => v);
+    if (vals.length) c.bestGain = Math.max(c.bestGain, (vals[vals.length - 1] - start) / start * 100);
+    let peak = start, dd = false;
+    for (const v of vals) { if (dd && v >= peak) c.comeback = true; if (v > peak) peak = v; if (v <= peak * 0.8) dd = true; }
+    if (g.owner === user.id && !g.sandboxOf) c.created++;
+    if (g.owner !== user.id) c.joined++;
+  }
+  return c;
+}
+route('POST', '/api/badges/check', async ({ user }) => {
+  const c = await badgeContext(user), earned = user.badges ||= {}, fresh = [];
+  for (const [id, icon, name, desc, test] of BADGES) if (!earned[id] && test(c)) { earned[id] = Date.now(); fresh.push({ id, icon, name, desc }); }
+  if (fresh.length) {
+    await store.saveUser(user.id, { badges: earned });
+    await store.saveProfile(user.id, publicProfile(user)).catch(() => {});
+    await notify(user, fresh.map(b => ({ kind: 'badge', text: `Badge earned: ${b.icon} ${b.name}`, link: '#/profile' })));
+  }
+  return fresh;
+});
+route('POST', '/api/learn/:id', async ({ user, params }) => {
+  if (![...LESSONS, ...CLASS_LESSONS].some(l => l.id === params.id)) throw httpError(404, 'Lesson not found.');
+  user.lessonsRead = [...new Set([...(user.lessonsRead || []), params.id])];
+  await store.saveUser(user.id, { lessonsRead: user.lessonsRead });
+  return { read: user.lessonsRead };
+});
+route('POST', '/api/quiz/:id', async ({ user, params, body }) => {
+  if (!CLASS_LESSONS.some(l => l.id === params.id)) throw httpError(404, 'Lesson not found.');
+  const prev = user.quizScores?.[params.id], score = Math.max(0, Number(body.score) || 0), total = Number(body.total) || 0;
+  user.quizScores = { ...user.quizScores, [params.id]: !prev || score >= prev.score ? { score, total, at: Date.now() } : prev };
+  user.lessonsRead = [...new Set([...(user.lessonsRead || []), params.id])];
+  await store.saveUser(user.id, { quizScores: user.quizScores, lessonsRead: user.lessonsRead });
+  return { scores: user.quizScores, read: user.lessonsRead };
+});
+
+// ---------- multi-leg strategies ----------
+route('POST', '/api/games/:gid/strategy', async ({ user, params, body }) => {
+  const g = await mustGame(params.gid), p = await store.getPlayer(params.gid, user.id), s = g.settings;
+  if (!p) throw httpError(404, 'Join this game first.');
+  if (!gameActive(g)) throw httpError(400, 'This game is not active.');
+  if (!s.allowOptions) throw httpError(403, 'Options trading is disabled for this game.');
+  if (!marketOpen()) throw httpError(400, 'Multi-leg strategies can only be placed while the market is open.');
+  const legs = (body.legs || []).slice(0, 4).map(l => ({ ...l, qty: Number(l.qty) }));
+  if (!legs.length) throw httpError(400, 'Add at least one leg.');
+  if (legs.some(l => !(l.qty > 0) || !Number.isInteger(l.qty) || !['buy', 'sell'].includes(l.side))) throw httpError(400, 'Every leg needs a whole-number quantity and a side.');
+  const stockLegs = legs.filter(l => l.kind === 'stock'), optLegs = legs.filter(l => l.kind === 'option');
+  optLegs.forEach(l => { l.key = optionKey(parseKey(l.key)); });
+  const mk = await marks([p, { positions: Object.fromEntries(stockLegs.map(l => [String(l.symbol).toUpperCase(), {}])), options: Object.fromEntries(optLegs.map(l => [l.key, {}])) }]);
+  // Written legs must be covered by bought legs of the same type and expiry (or by shares for calls).
+  const book = {};
+  for (const l of optLegs) { const o = parseKey(l.key), k = o.type + o.exp; book[k] ||= { long: 0, short: 0, type: o.type, symbol: o.symbol }; book[k][l.side === 'buy' ? 'long' : 'short'] += l.qty; }
+  let uncovered = 0;
+  for (const b of Object.values(book)) {
+    const shares = b.type === 'C' ? Math.max(0, p.positions[b.symbol]?.qty || 0) + stockLegs.filter(l => l.side === 'buy' && String(l.symbol).toUpperCase() === b.symbol).reduce((a, l) => a + l.qty, 0) : 0;
+    uncovered += Math.max(0, b.short - b.long - Math.floor(shares / 100));
+  }
+  if (uncovered > 0 && !s.allowOptionWriting) throw httpError(403, 'This strategy writes uncovered options, which this game doesn’t allow.');
+  const sid = rid(), name = String(body.name || 'strategy').slice(0, 40);
+  let net = 0, fees = 0;
+  const plan = legs.map(l => {
+    const base = { id: rid(), qty: l.qty, type: 'market', duration: 'day', created: Date.now(), day: nyDate(), status: 'open', strategyId: sid, strategy: name };
+    if (l.kind === 'option') {
+      const oq = mk.optq[l.key]; if (!oq || oq.expired) throw httpError(400, 'One of the contracts can’t be priced right now.');
+      const held = p.options?.[l.key]?.qty || 0;
+      const action = l.side === 'buy' ? (held < 0 ? 'btc' : 'bto') : (held > 0 ? 'stc' : 'sto');
+      if ((action === 'btc' && -held < l.qty) || (action === 'stc' && held < l.qty)) throw httpError(400, `Leg ${oq.desc} would partly close and partly open a position. Adjust its quantity.`);
+      const price = l.side === 'buy' ? oq.ask : oq.bid;
+      net += (l.side === 'buy' ? 1 : -1) * l.qty * 100 * price; fees += optionFee(g, l.qty, l.qty * 100 * price);
+      return { kind: 'option', price, o: { ...base, asset: 'option', key: l.key, symbol: oq.symbol, desc: oq.desc, action } };
+    }
+    const sym = String(l.symbol).toUpperCase(), q = mk.quotes[sym]; if (!q) throw httpError(400, `Couldn't price ${sym}.`);
+    const held = p.positions[sym]?.qty || 0;
+    const action = l.side === 'buy' ? (held < 0 ? 'cover' : 'buy') : (held > 0 ? 'sell' : 'short');
+    if (action === 'short' && !s.allowShort) throw httpError(403, 'Short selling is disabled for this game.');
+    if (action === 'sell' && held < l.qty) throw httpError(400, `You only hold ${held} ${sym}.`);
+    net += (l.side === 'buy' ? 1 : -1) * l.qty * q.price; fees += commissionFor(g, l.qty * q.price);
+    return { kind: 'stock', price: q.price, o: { ...base, symbol: sym, action } };
+  });
+  const v = valuation(p, mk.quotes, mk.optq);
+  if (net + fees > buyingPower(p, g, v)) throw httpError(400, 'Not enough buying power for this strategy.');
+  for (const leg of plan) { p.orders.push(leg.o); leg.kind === 'option' ? fillOption(p, g, leg.o, leg.price) : fill(p, g, leg.o, leg.price); }
+  await savePlayer(g, p);
+  return { filled: true, net, fees, legs: plan.map(l => l.o) };
 });
 
 export async function api(path, method = 'GET', body = {}) {
@@ -634,9 +978,9 @@ export async function api(path, method = 'GET', body = {}) {
 
 // Fill pending orders in the background while the app is open.
 setInterval(async () => {
-  if (!me || !marketOpen()) return;
+  if (!me) return;
   for (const g of await store.myGames(me.id)) {
     const p = await store.getPlayer(g.id, me.id);
-    if ((p?.orders.length || Object.keys(p?.options || {}).length) && await processOrders(p, g)) await store.savePlayer(g.id, me.id, p);
+    if ((p?.orders.length || Object.keys(p?.options || {}).length) && await processOrders(p, g)) await savePlayer(g, p);
   }
 }, 30000);

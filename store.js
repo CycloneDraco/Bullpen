@@ -42,6 +42,26 @@ async function firebaseStore(cfg) {
     getProfile: async uid => data(await F.getDoc(d('profiles', uid))),
     saveProfile: (uid, p) => F.setDoc(d('profiles', uid), p, { merge: true }),
     deleteUserDocs: uid => Promise.all([F.deleteDoc(d('users', uid)), F.deleteDoc(d('profiles', uid))]),
+    // Game activity feed (trades, joins, comments).
+    addActivity: (gid, item) => F.setDoc(d('games', gid, 'activity', item.id), item),
+    listActivity: async (gid, n = 80) => (await F.getDocs(F.query(F.collection(db, 'games', gid, 'activity'), F.orderBy('created', 'desc'), F.limit(n)))).docs.map(data),
+    deleteActivity: (gid, id) => F.deleteDoc(d('games', gid, 'activity', id)),
+    // Unique @usernames: handles/{name} → owner uid.
+    async claimHandle(uid, handle, old) {
+      const cur = data(await F.getDoc(d('handles', handle)));
+      if (cur && cur.uid !== uid) throw new Error(`@${handle} is taken.`);
+      const b = F.writeBatch(db);
+      b.set(d('handles', handle), { uid });
+      if (old && old !== handle) b.delete(d('handles', old));
+      await b.commit();
+    },
+    lookupHandle: async handle => data(await F.getDoc(d('handles', handle)))?.uid || null,
+    releaseHandle: handle => F.deleteDoc(d('handles', handle)).catch(() => {}),
+    // Game invites and challenges.
+    sendInvite: inv => F.setDoc(d('invites', inv.id), inv),
+    listInvites: async uid => (await F.getDocs(F.query(F.collection(db, 'invites'), F.where('to', '==', uid)))).docs.map(data),
+    getInvite: async id => data(await F.getDoc(d('invites', id))),
+    deleteInvite: id => F.deleteDoc(d('invites', id)),
     getUser: async uid => data(await F.getDoc(d('users', uid))),
     saveUser: (uid, u) => F.setDoc(d('users', uid), u, { merge: true }),
     getGame: async gid => data(await F.getDoc(d('games', gid))),
@@ -107,9 +127,23 @@ function localStore() {
     async sendVerification() {},
     async reloadUser() { return this.currentUser(); },
     async deleteAuthUser() { db.session = null; persist(); },
-    getProfile: async uid => db.users[uid] ? clone({ id: uid, name: db.users[uid].name, picture: db.users[uid].picture, bio: db.users[uid].bio, color: db.users[uid].color, joined: db.users[uid].joined }) : null,
+    getProfile: async uid => db.users[uid] ? clone({ id: uid, name: db.users[uid].name, picture: db.users[uid].picture, bio: db.users[uid].bio, color: db.users[uid].color, joined: db.users[uid].joined, handle: db.users[uid].handle, badges: db.users[uid].badges }) : null,
     async saveProfile() {},
     async deleteUserDocs(uid) { delete db.users[uid]; persist(); },
+    async addActivity(gid, item) { ((db.activity ||= {})[gid] ||= []).unshift(clone(item)); persist(); },
+    listActivity: async (gid, n = 80) => clone((db.activity?.[gid] || []).slice(0, n)),
+    async deleteActivity(gid, id) { if (db.activity?.[gid]) db.activity[gid] = db.activity[gid].filter(a => a.id !== id); persist(); },
+    async claimHandle(uid, handle, old) {
+      db.handles ||= {};
+      if (db.handles[handle] && db.handles[handle] !== uid) throw new Error(`@${handle} is taken.`);
+      db.handles[handle] = uid; if (old && old !== handle) delete db.handles[old]; persist();
+    },
+    lookupHandle: async handle => db.handles?.[handle] || null,
+    async releaseHandle(handle) { delete db.handles?.[handle]; persist(); },
+    async sendInvite(inv) { (db.invites ||= {})[inv.id] = clone(inv); persist(); },
+    listInvites: async uid => Object.values(db.invites || {}).filter(i => i.to === uid).map(clone),
+    getInvite: async id => clone(db.invites?.[id]) || null,
+    async deleteInvite(id) { delete db.invites?.[id]; persist(); },
     getUser: async uid => db.users[uid] ? clone({ id: uid, ...db.users[uid] }) : null,
     async saveUser(uid, u) { db.users[uid] = { ...db.users[uid], ...clone(u) }; persist(); },
     getGame: async gid => clone(db.games[gid]) || null,

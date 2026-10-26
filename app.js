@@ -1,6 +1,8 @@
 // Bullpen front end — vanilla JS single-page app with hash routing.
 import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut, account } from './backend.js';
 import CONFIG from './config.js';
+import { tvSymbol, isCrypto } from './backend.js';
+import * as F from './features.js';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const app = $('#app');
@@ -148,8 +150,10 @@ async function loadGames() {
   sel.innerHTML = state.games.mine.map(g => `<option value="${g.id}" ${g.id === state.gameId ? 'selected' : ''}>${esc(g.settings.name)}</option>`).join('');
 }
 const activeGame = () => state.games.mine.find(g => g.id === state.gameId);
+let shellMounted = false;
 function renderShell() {
   $('#nav').hidden = false;
+  if (!shellMounted) { shellMounted = true; F.mountBell(); F.mountShortcuts(); $('#kbdHelp').onclick = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: '?' })); }
   const u = state.me, av = $('#avatarBtn');
   av.innerHTML = avatarHtml(u, 32);
   av.setAttribute('aria-label', 'Account: ' + u.name);
@@ -240,11 +244,14 @@ async function viewDashboard() {
     <div class="grid g-half" style="margin-top:var(--gap)">
       <div class="card"><div class="card-head"><h2>Top holdings</h2><a href="#/portfolio" class="small">See all</a></div><div id="top"></div></div>
       <div class="card"><div class="card-head"><h2>Market movers</h2><span class="muted small">Large caps</span></div><div id="movers"></div></div>
-    </div></div>`;
+    </div>
+    <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Market news</h2><a href="#/lessons" class="small">New to this? Start with the lessons</a></div><div id="news"></div></div></div>`;
+  F.renderNews($('#news'), '', 6);
+  F.checkBadges();
   const load = async () => {
     const [m, pf, wl] = await Promise.all([api('/api/market'), api(`/api/games/${g.id}/portfolio`), api('/api/watchlist')]);
     $('#mkt').innerHTML = `<span class="badge ${m.open ? 'live' : 'closed'}">${m.open ? 'Market open' : 'Market closed'}</span>`;
-    const names = { SPY: 'S&P 500 · SPY', DIA: 'Dow Jones · DIA', QQQ: 'Nasdaq 100 · QQQ', IWM: 'Russell 2000 · IWM', GLD: 'Gold · GLD' };
+    const names = { SPY: 'S&P 500 · SPY', DIA: 'Dow Jones · DIA', QQQ: 'Nasdaq 100 · QQQ', IWM: 'Russell 2000 · IWM', 'BTC-USD': 'Bitcoin · BTC' };
     $('#indices').innerHTML = Object.entries(names).map(([s, n]) => { const q = m.indices[s]; return `<a class="card" href="#/research?symbol=${encodeURIComponent(s)}"><div class="muted small">${n}</div><div class="num" style="font-weight:650;font-size:1.1rem;color:var(--ink)">${q ? q.price.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}</div><div class="small ${cls(q?.change)}">${q ? pct(q.changePct) : ''}</div></a>`; }).join('');
     $('#acct').textContent = money(pf.equity, { full: true });
     $('#acctChg').innerHTML = `${chip(pf.totalGain, `${signed(pf.totalGain)} (${pct(pf.totalGainPct)})`)} <span class="muted small">all time</span>${prefs().showDayChange !== false ? ` &nbsp;${chip(pf.dayChange, signed(pf.dayChange))} <span class="muted small">today</span>` : ''}`;
@@ -255,7 +262,7 @@ async function viewDashboard() {
     $('#wl').innerHTML = quoteList(wl.symbols.map(s => wl.quotes[s]).filter(Boolean));
     $('#movers').innerHTML = quoteList(Object.values(m.movers).sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct)).slice(0, 6));
     const top = [...pf.holdings].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5);
-    $('#top').innerHTML = top.length ? quoteList(top.map(h => ({ symbol: h.symbol, name: `${h.qty} shares · ${money(h.value)}`, price: h.price, changePct: h.gainPct }))) : `<div class="empty">No holdings yet.<br><a href="#/trade" class="btn sm" style="margin-top:12px">Make your first trade</a></div>`;
+    $('#top').innerHTML = top.length ? quoteList(top.map(h => ({ symbol: h.symbol, name: `${F.qtyFmt(h.qty)} ${h.type === 'CRYPTO' ? 'coins' : 'shares'} · ${money(h.value)}`, price: h.price, changePct: h.gainPct }))) : `<div class="empty">No holdings yet.<br><a href="#/trade" class="btn sm" style="margin-top:12px">Make your first trade</a></div>`;
   };
   await load(); every(20000, () => load().catch(() => {}));
 }
@@ -276,7 +283,7 @@ async function viewPortfolio(q) {
       ${own ? `<div class="row">${pf.game.settings.allowReset ? '<button class="btn secondary sm" id="reset">Reset portfolio</button>' : ''}<a class="btn" href="#/trade">Trade</a></div>` : ''}</div>
     <div class="grid g4">${[['Account value', money(pf.equity)], ['Today', `<span class="${cls(pf.dayChange)}">${signed(pf.dayChange)}</span>`], ['Total return', `<span class="${cls(pf.totalGain)}">${signed(pf.totalGain)} <span class="small">${pct(pf.totalGainPct)}</span></span>`], ['Buying power', money(pf.buyingPower)], ['Cash', money(pf.cash)], ['Long value', money(pf.longValue)], ['Short value', money(pf.shortValue)], ['Positions', pf.holdings.length + (pf.options || []).length]].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
     <div class="card" style="margin-top:var(--gap)">
-      <div class="card-head"><div class="seg">${['holdings', ...(own ? ['orders'] : []), 'history', 'performance'].map(t => `<button data-t="${t}" class="${t === tab ? 'on' : ''}">${{ holdings: 'Holdings', orders: `Open orders (${pf.orders.length})`, history: 'Trade history', performance: 'Performance' }[t]}</button>`).join('')}</div></div>
+      <div class="card-head"><div class="seg">${['holdings', ...(own ? ['orders'] : []), 'history', 'performance', 'analytics'].map(t => `<button data-t="${t}" class="${t === tab ? 'on' : ''}">${{ holdings: 'Holdings', orders: `Open orders (${pf.orders.length})`, history: 'Trade history', performance: 'Performance', analytics: 'Analytics' }[t]}</button>`).join('')}</div></div>
       <div id="pane"></div></div></div>`;
   $$('.seg button').forEach(b => b.addEventListener('click', () => location.hash = tabUrl(b.dataset.t)));
   $('#reset')?.addEventListener('click', () => modal(`<h2>Reset portfolio?</h2><p class="muted">All positions, orders and history in <b>${esc(g.settings.name)}</b> will be cleared and your cash restored to ${money(g.settings.startingCash)}.</p><div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn danger" data-ok>Reset</button></div>`, (el, close) => {
@@ -287,7 +294,7 @@ async function viewPortfolio(q) {
   if (tab === 'holdings') {
     const longs = pf.holdings.filter(h => h.qty > 0), shorts = pf.holdings.filter(h => h.qty < 0);
     const tbl = (rows, short) => `<div class="table-wrap"><table><thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Day</th><th class="r">${short ? 'Short' : 'Avg'} price</th><th class="r">Value</th><th class="r">Gain / loss</th>${own ? '<th></th>' : ''}</tr></thead><tbody>
-      ${rows.map(h => `<tr class="link" data-go="#/research?symbol=${encodeURIComponent(h.symbol)}"><td><div class="sym">${esc(h.symbol)}</div><div class="sym-name">${esc(h.name)}</div></td><td class="r">${Math.abs(h.qty)}</td><td class="r">${money(h.price, { full: true })}</td><td class="r ${cls(h.dayChangePct)}">${pct(h.dayChangePct)}</td><td class="r">${money(h.avg, { full: true })}</td><td class="r">${money(Math.abs(h.value))}</td><td class="r ${cls(h.gain)}">${signed(h.gain)}<div class="small">${pct(h.gainPct)}</div></td>${own ? `<td class="r"><a class="btn sm secondary" href="#/trade?symbol=${encodeURIComponent(h.symbol)}&action=${short ? 'cover' : 'sell'}&qty=${Math.abs(h.qty)}">${short ? 'Cover' : 'Sell'}</a></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
+      ${rows.map(h => `<tr class="link" data-go="#/research?symbol=${encodeURIComponent(h.symbol)}"><td><div class="sym">${esc(h.symbol)}</div><div class="sym-name">${esc(h.name)}</div></td><td class="r">${F.qtyFmt(Math.abs(h.qty))}</td><td class="r">${money(h.price, { full: true })}</td><td class="r ${cls(h.dayChangePct)}">${pct(h.dayChangePct)}</td><td class="r">${money(h.avg, { full: true })}</td><td class="r">${money(Math.abs(h.value))}</td><td class="r ${cls(h.gain)}">${signed(h.gain)}<div class="small">${pct(h.gainPct)}</div></td>${own ? `<td class="r"><a class="btn sm secondary" href="#/trade?symbol=${encodeURIComponent(h.symbol)}&action=${short ? 'cover' : 'sell'}&qty=${Math.abs(h.qty)}">${short ? 'Cover' : 'Sell'}</a></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
     const opts = pf.options || [];
     const optTbl = opts.length ? `<h3 style="margin:22px 0 6px">Options</h3><div class="table-wrap"><table><thead><tr><th>Contract</th><th class="r">Contracts</th><th class="r">Underlying</th><th class="r">Mark</th><th class="r">Avg price</th><th class="r">Delta</th><th class="r">Value</th><th class="r">Gain / loss</th>${own ? '<th></th>' : ''}</tr></thead><tbody>
       ${opts.map(h => `<tr><td><div class="sym">${esc(h.name)}</div><div class="sym-name">${h.qty > 0 ? 'Long' : 'Written'} · expires ${h.exp}</div></td><td class="r">${h.qty}</td><td class="r">${money(h.underlying, { full: true })}</td><td class="r">${money(h.price, { full: true })}</td><td class="r">${money(h.avg, { full: true })}</td><td class="r">${h.delta == null ? '—' : (h.delta * Math.sign(h.qty)).toFixed(2)}</td><td class="r">${signed(h.value)}</td><td class="r ${cls(h.gain)}">${signed(h.gain)}<div class="small">${pct(h.gainPct)}</div></td>${own ? `<td class="r"><a class="btn sm secondary" href="#/trade?asset=option&key=${encodeURIComponent(h.key)}&action=${h.qty > 0 ? 'stc' : 'btc'}&qty=${Math.abs(h.qty)}">Close</a></td>` : ''}</tr>`).join('')}</tbody></table></div>` : '';
@@ -302,6 +309,7 @@ async function viewPortfolio(q) {
     pane.innerHTML = pf.history.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Symbol</th><th>Action</th><th class="r">Qty</th><th>Type</th><th class="r">Price</th><th class="r">Fee</th><th>Status</th></tr></thead><tbody>
       ${pf.history.map(o => `<tr><td>${when(o.filledAt || o.created)}</td>${tradeCells(o)}<td class="r">${o.qty}</td><td>${orderDesc(o)}</td><td class="r">${o.fillPrice ? money(o.fillPrice, { full: true }) : '—'}</td><td class="r">${o.fee ? money(o.fee) : '—'}</td><td><span class="badge ${o.status === 'filled' ? 'live' : ''}" title="${esc(o.reason || '')}">${o.status}</span></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No trades yet.</div>';
   }
+  if (tab === 'analytics') F.renderAnalytics(pane, pf, g);
   if (tab === 'performance') {
     pane.innerHTML = '<div id="pchart"></div><div class="chart-tip" id="ptip"></div>';
     const snaps = Object.entries(pf.snapshots).sort().map(([d, v]) => [new Date(d + 'T16:00:00').getTime(), v]);
@@ -311,12 +319,13 @@ async function viewPortfolio(q) {
 }
 const ACTION_LABEL = { buy: 'Buy', sell: 'Sell', short: 'Short', cover: 'Cover', bto: 'Buy to open', stc: 'Sell to close', sto: 'Sell to open', btc: 'Buy to close' };
 const tradeCells = o => `<td class="sym">${esc(o.asset === 'option' ? o.desc : o.symbol)}</td><td>${ACTION_LABEL[o.action] || o.action}</td>`;
-const orderDesc = o => ({ market: 'Market', limit: `Limit ${money(o.limitPrice, { full: true })}`, stop: `Stop ${money(o.stopPrice, { full: true })}`, trailing: `Trailing ${o.trailUnit === '$' ? money(o.trail) : o.trail + '%'}` }[o.type]);
+const orderDesc = o => o.type === 'dividend' ? `${o.qty} day${o.qty > 1 ? 's' : ''} of dividends` : ({ market: 'Market', limit: `Limit ${money(o.limitPrice, { full: true })}`, stop: `Stop ${money(o.stopPrice, { full: true })}`, trailing: `Trailing ${o.trailUnit === '$' ? money(o.trail) : o.trail + '%'}` }[o.type]);
 
 // ---------- trade ----------
-const assetSwitch = (asset, s) => s.allowOptions ? `<div class="seg"><button type="button" class="${asset === 'stock' ? 'on' : ''}" onclick="location.hash='#/trade'">Stocks &amp; ETFs</button><button type="button" class="${asset === 'option' ? 'on' : ''}" onclick="location.hash='#/trade?asset=option'">Options</button></div>` : '';
+const assetSwitch = (asset, s) => s.allowOptions ? `<div class="seg">${[['stock', 'Stocks, ETFs &amp; crypto', '#/trade'], ['option', 'Options', '#/trade?asset=option'], ['strategy', 'Strategies', '#/trade?asset=strategy']].map(([k, t, h]) => `<button type="button" class="${asset === k ? 'on' : ''}" onclick="location.hash='${h}'">${t}</button>`).join('')}</div>` : '';
 async function viewTrade(q) {
   if (q.get('asset') === 'option') return viewTradeOptions(q);
+  if (q.get('asset') === 'strategy') return F.viewStrategy(q, assetSwitch('strategy', activeGame().settings));
   const g = activeGame(), s = g.settings;
   const f = { symbol: (q.get('symbol') || '').toUpperCase(), action: q.get('action') || 'buy', qty: q.get('qty') || '', type: 'market', duration: 'day', limitPrice: '', stopPrice: '', trail: '', trailUnit: '%' };
   const actions = ['buy', 'sell', ...(s.allowShort ? ['short', 'cover'] : [])];
@@ -327,8 +336,8 @@ async function viewTrade(q) {
       <div id="quote"></div>
       <div class="field"><span class="muted small" style="font-weight:600">Action</span><div class="seg full" id="act">${actions.map(a => `<button type="button" data-v="${a}">${a[0].toUpperCase() + a.slice(1)}</button>`).join('')}</div></div>
       <div class="form-grid">
-        <label class="field"><span>Quantity</span><input name="qty" type="number" min="1" step="1" inputmode="numeric" value="${esc(f.qty)}" placeholder="0"><div class="hint" id="maxq"></div></label>
-        <label class="field"><span>Order type</span><select name="type">${types.map(t => `<option value="${t}">${{ market: 'Market', limit: 'Limit', stop: 'Stop', trailing: 'Trailing stop' }[t]}</option>`).join('')}</select></label>
+        <label class="field"><span>Quantity</span><input name="qty" type="number" min="1" step="1" inputmode="decimal" value="${esc(f.qty)}" placeholder="0"><div class="hint" id="maxq"></div></label>
+        <label class="field"><span>Order type ${F.tip('limit')}</span><select name="type">${types.map(t => `<option value="${t}">${{ market: 'Market', limit: 'Limit', stop: 'Stop', trailing: 'Trailing stop' }[t]}</option>`).join('')}</select></label>
         <label class="field" data-for="limit" hidden><span>Limit price</span><input name="limitPrice" type="number" step="0.01" min="0"></label>
         <label class="field" data-for="stop" hidden><span>Stop price</span><input name="stopPrice" type="number" step="0.01" min="0"></label>
         <label class="field" data-for="trailing" hidden><span>Trail by</span><div class="row" style="flex-wrap:nowrap"><input name="trail" type="number" step="0.01" min="0"><select name="trailUnit" style="width:80px"><option>%</option><option>$</option></select></div></label>
@@ -349,13 +358,15 @@ async function viewTrade(q) {
     const qty = +form.qty.value || 0, amt = qty * price;
     const fee = s.commissionType === 'flat' ? (qty ? s.commission : 0) : amt * s.commission / 100;
     const held = pf.holdings.find(h => h.symbol === quote.symbol)?.qty || 0;
-    const max = f.action === 'sell' ? Math.max(0, held) : f.action === 'cover' ? Math.max(0, -held) : Math.floor(Math.max(0, pf.buyingPower - (s.commissionType === 'flat' ? s.commission : 0)) / (price * (1 + (s.commissionType === 'percent' ? s.commission / 100 : 0))));
-    $('#maxq').innerHTML = `Max: <a href="#" id="maxset">${max.toLocaleString()}</a>`;
+    const raw = Math.max(0, pf.buyingPower - (s.commissionType === 'flat' ? s.commission : 0)) / (price * (1 + (s.commissionType === 'percent' ? s.commission / 100 : 0)));
+    const max = f.action === 'sell' ? Math.max(0, held) : f.action === 'cover' ? Math.max(0, -held) : isCrypto(quote.symbol) ? Math.floor(raw * 1e6) / 1e6 : Math.floor(raw);
+    $('#maxq').innerHTML = `Max: <a href="#" id="maxset">${F.qtyFmt(max)}</a>${isCrypto(quote.symbol) ? ' · fractions allowed, 24/7' : ''}`;
     $('#maxset').onclick = e => { e.preventDefault(); form.qty.value = max; estimate(); };
     $('#est').innerHTML = qty ? `Estimated ${f.action === 'sell' || f.action === 'short' ? 'proceeds' : 'cost'}: <b class="num" style="color:var(--ink)">${money(amt, { full: true })}</b>${fee ? ` + ${money(fee)} commission` : ''}` : '';
   }
   async function loadQuote(sym) {
     f.symbol = sym; form.symbol.value = sym;
+    form.qty.step = isCrypto(sym) ? 'any' : '1'; form.qty.min = isCrypto(sym) ? '0' : '1';
     try { const r = await api('/api/quote?symbols=' + encodeURIComponent(sym)); quote = r[sym]; } catch { quote = null; }
     $('#quote').innerHTML = quote ? `<div class="row"><div><div class="sym" style="font-size:1.1rem">${esc(quote.symbol)}</div><div class="muted small">${esc(quote.name)}</div></div><span class="spacer"></span><div style="text-align:right"><div class="num" style="font-size:1.4rem;font-weight:650">${money(quote.price, { full: true })}</div><div class="small ${cls(quote.change)}">${signed(quote.change)} (${pct(quote.changePct)})</div></div></div>` : sym ? `<div class="down small">Couldn't find “${esc(sym)}”.</div>` : '';
     estimate();
@@ -368,7 +379,8 @@ async function viewTrade(q) {
     if (!(o.qty > 0)) return toast('Enter a quantity.', true);
     const submit = async close => {
       try { const r = await api(`/api/games/${g.id}/orders`, { method: 'POST', body: o }); close?.();
-        toast(r.filled ? `${o.action[0].toUpperCase() + o.action.slice(1)} ${o.qty} ${o.symbol} filled at ${money(r.order.fillPrice, { full: true })}` : r.marketOpen ? 'Order placed. It will fill when its price is reached.' : 'Order placed. It will fill when the market opens.');
+        F.checkBadges();
+        toast(r.filled ? `${o.action[0].toUpperCase() + o.action.slice(1)} ${F.qtyFmt(o.qty)} ${o.symbol} filled at ${money(r.order.fillPrice, { full: true })}` : r.marketOpen ? 'Order placed. It will fill when its price is reached.' : 'Order placed. It will fill when the market opens.');
         location.hash = r.filled ? '#/portfolio' : '#/portfolio?tab=orders';
       } catch (err) { toast(err.message, true); }
     };
@@ -387,7 +399,7 @@ async function viewTrade(q) {
   });
   setAct(actions.includes(f.action) ? f.action : 'buy');
   pf = await api(`/api/games/${g.id}/portfolio`);
-  $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l}</div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length + (pf.options || []).length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
+  $('#acct').innerHTML = `<h3>Your account</h3><div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">${[['Account value', pf.equity], ['Buying power', pf.buyingPower], ['Cash', pf.cash], ['Positions', null]].map(([l, v]) => `<div class="stat"><div class="label">${l} ${l === 'Buying power' ? F.tip('buyingPower') : l === 'Account value' ? F.tip('equity') : ''}</div><div class="value" style="font-size:1.1rem">${v == null ? pf.holdings.length + (pf.options || []).length : money(v)}</div></div>`).join('')}</div><div style="margin-top:10px"><span class="badge ${pf.marketOpen ? 'live' : 'closed'}">${pf.marketOpen ? 'Market open' : 'Market closed'}</span></div>`;
   $('#rules').innerHTML = `<h3 style="color:var(--ink);margin-bottom:6px">Game rules</h3>Commission: ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) + ' per trade' : s.commission + '% of trade') : 'none'}<br>Short selling: ${s.allowShort ? `on (min ${money(s.minShortPrice)})` : 'off'}<br>Margin: ${s.allowMargin ? `on (${s.marginInterest}% interest)` : 'off'}<br>${s.minStockPrice ? `Min. stock price: ${money(s.minStockPrice)}<br>` : ''}${s.maxPositionPct < 100 ? `Max position: ${s.maxPositionPct}% of portfolio<br>` : ''}${s.dailyTradeLimit ? `Daily trade limit: ${s.dailyTradeLimit}<br>` : ''}ETFs: ${s.allowEtf ? 'allowed' : 'not allowed'}<br>Options: ${s.allowOptions ? (s.allowOptionWriting ? 'buy and write' : 'buy only') : 'off'}`;
   if (f.symbol) loadQuote(f.symbol); else form.symbol.focus();
 }
@@ -445,7 +457,7 @@ async function viewTradeOptions(q) {
     $$('#oside button').forEach(b => b.classList.toggle('on', b.dataset.v === st.side));
     const rows = st.side === 'C' ? ch.calls : ch.puts, S = ch.quote.price;
     let marked = false;
-    $('#chain').innerHTML = `<div class="table-wrap"><table class="chain"><thead><tr><th>Strike</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Mid</th><th class="r">Delta</th><th class="r">IV</th></tr></thead><tbody>
+    $('#chain').innerHTML = `<div class="table-wrap"><table class="chain"><thead><tr><th>Strike</th><th class="r">Bid ${F.tip('bid')}</th><th class="r">Ask ${F.tip('ask')}</th><th class="r">Mid</th><th class="r">Delta ${F.tip('delta')}</th><th class="r">IV ${F.tip('iv')}</th></tr></thead><tbody>
       ${rows.map(c => { const line = !marked && c.strike >= S ? (marked = true, `<tr class="spot"><td colspan="6">${esc(ch.quote.symbol)} ${money(S, { full: true })}</td></tr>`) : '';
         return `${line}<tr class="link ${c.itm ? 'itm' : ''}" data-k="${esc(c.key)}"><td><b>${money(c.strike)}</b></td><td class="r">${money(c.bid, { full: true })}</td><td class="r">${money(c.ask, { full: true })}</td><td class="r">${money(c.mid, { full: true })}</td><td class="r">${c.delta.toFixed(2)}</td><td class="r">${(c.iv * 100).toFixed(1)}%</td></tr>`; }).join('')}</tbody></table></div>`;
     $$('#chain tr[data-k]').forEach(r => r.onclick = () => select(rows.find(c => c.key === r.dataset.k)));
@@ -473,6 +485,7 @@ async function viewTradeOptions(q) {
     const buy = o.action === 'bto' || o.action === 'btc', px = o.type === 'limit' ? o.limitPrice : buy ? c.ask : c.bid;
     const submit = async close => {
       try { const r = await api(`/api/games/${g.id}/orders`, { method: 'POST', body: o }); close?.();
+        F.checkBadges();
         toast(r.filled ? `${ACTION_LABEL[o.action]} ${o.qty} × ${c.desc} filled at ${money(r.order.fillPrice, { full: true })}` : r.marketOpen ? 'Order placed. It fills when its price is reached.' : 'Order placed. It fills when the market opens.');
         location.hash = r.filled ? '#/portfolio' : '#/portfolio?tab=orders';
       } catch (err) { toast(err.message, true); }
@@ -511,9 +524,13 @@ async function viewResearch(q) {
       <div id="pxc" class="${cls(qt.change)}" style="font-weight:600;margin-bottom:14px">${signed(qt.change)} (${pct(qt.changePct)}) today</div>
       <div id="chart" class="tv"></div></div>
     <div class="stack"><div class="card"><h3 style="margin-bottom:8px">Key stats</h3><table><tbody>
-      ${[['Previous close', money(qt.prevClose, { full: true })], ['Open', money(qt.open, { full: true })], ['Day range', `${money(qt.low, { full: true })} – ${money(qt.high, { full: true })}`], ['Type', qt.type === 'ETF' ? 'Fund' : 'Stock'], ['Last update', when(qt.time)]].map(([k, v]) => `<tr><td class="muted">${k}</td><td class="r">${v}</td></tr>`).join('')}</tbody></table></div>
-      <div class="card row"><a class="btn up" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=buy">Buy</a><a class="btn down" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=sell">Sell</a>${activeGame()?.settings.allowShort ? `<a class="btn secondary" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=short">Short</a>` : ''}${activeGame()?.settings.allowOptions ? `<a class="btn secondary" style="flex:1" href="#/trade?asset=option&symbol=${encodeURIComponent(sym)}">Options</a>` : ''}</div>
-    </div></div>`;
+      ${[['Previous close', money(qt.prevClose, { full: true })], ['Open', money(qt.open, { full: true })], ...(qt.industry && qt.type === 'EQUITY' ? [['Sector', esc(qt.industry)]] : []), ...(qt.marketCap ? [['Market cap', qt.marketCap >= 1e6 ? '$' + (qt.marketCap / 1e6).toFixed(2) + 'T' : '$' + (qt.marketCap / 1e3).toFixed(1) + 'B']] : []), ...(qt.type === 'EQUITY' ? [['Next earnings', '<span id="earn">…</span>']] : []), ['Day range', `${money(qt.low, { full: true })} – ${money(qt.high, { full: true })}`], ['Type', { ETF: 'Fund', CRYPTO: 'Crypto (trades 24/7)' }[qt.type] || 'Stock'], ['Last update', when(qt.time)]].map(([k, v]) => `<tr><td class="muted">${k}</td><td class="r">${v}</td></tr>`).join('')}</tbody></table></div>
+      <div class="card row"><a class="btn up" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=buy">Buy</a><a class="btn down" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=sell">Sell</a>${activeGame()?.settings.allowShort && !isCrypto(sym) ? `<a class="btn secondary" style="flex:1" href="#/trade?symbol=${encodeURIComponent(sym)}&action=short">Short</a>` : ''}${activeGame()?.settings.allowOptions && !isCrypto(sym) ? `<a class="btn secondary" style="flex:1" href="#/trade?asset=option&symbol=${encodeURIComponent(sym)}">Options</a>` : ''}</div>
+      <a class="btn secondary block" href="#/alerts?symbol=${encodeURIComponent(sym)}">🔔 Set a price alert</a>
+    </div></div>
+    <div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:10px">${isCrypto(sym) ? 'Crypto news' : 'Latest news'}</h2><div id="news"></div></div>`;
+  F.renderNews($('#news'), sym, 8);
+  if ($('#earn')) F.fillEarnings($('#earn'), sym);
   $('#watch').onclick = async () => {
     const list = watching ? wl.symbols.filter(s => s !== sym) : [...wl.symbols, sym];
     await api('/api/watchlist', { method: 'PUT', body: { symbols: list } }); toast(watching ? 'Removed from watchlist.' : 'Added to watchlist.'); route();
@@ -529,14 +546,14 @@ function tradingViewChart(host, sym) {
   host.innerHTML = '<div class="tradingview-widget-container" style="height:100%"><div class="tradingview-widget-container__widget" style="height:100%"></div></div>';
   const s = document.createElement('script');
   s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; s.async = true;
-  s.textContent = JSON.stringify({ symbol: sym, range, interval: range === '1D' ? '5' : 'D', theme: dark ? 'dark' : 'light', style: '3', locale: 'en', autosize: true, hide_side_toolbar: true, allow_symbol_change: false, save_image: false, backgroundColor: dark ? 'rgba(28,28,30,1)' : 'rgba(255,255,255,1)', gridColor: 'rgba(128,128,128,0.08)', support_host: 'https://www.tradingview.com' });
+  s.textContent = JSON.stringify({ symbol: tvSymbol(sym), range, interval: range === '1D' ? '5' : 'D', theme: dark ? 'dark' : 'light', style: '3', locale: 'en', autosize: true, hide_side_toolbar: true, allow_symbol_change: false, save_image: false, backgroundColor: dark ? 'rgba(28,28,30,1)' : 'rgba(255,255,255,1)', gridColor: 'rgba(128,128,128,0.08)', support_host: 'https://www.tradingview.com' });
   $('.tradingview-widget-container', host).append(s);
 }
 
 // ---------- watchlist ----------
 async function viewWatchlist() {
   const wl = await api('/api/watchlist');
-  app.innerHTML = `<div class="view"><div class="page-head"><h1>Watchlist</h1><div style="width:min(360px,100%)"><div><input id="add" placeholder="Add a symbol" aria-label="Add a symbol"></div></div></div>
+  app.innerHTML = `<div class="view"><div class="page-head"><div><h1>Watchlist</h1><a href="#/alerts" class="small">🔔 Price alerts</a></div><div style="width:min(360px,100%)"><div><input id="add" placeholder="Add a symbol" aria-label="Add a symbol"></div></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Symbol</th><th class="r">Price</th><th class="r">Change</th><th class="r">Day range</th><th class="r">Open</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></div></div>`;
   const render = (w) => {
     $('#rows').innerHTML = w.symbols.length ? w.symbols.map(s => { const q = w.quotes[s] || {}; return `<tr class="link" data-go="#/research?symbol=${encodeURIComponent(s)}"><td><div class="sym">${esc(s)}</div><div class="sym-name">${esc(q.name)}</div></td><td class="r">${money(q.price, { full: true })}</td><td class="r ${cls(q.change)}">${signed(q.change ?? 0)}<div class="small">${pct(q.changePct)}</div></td><td class="r">${money(q.low, { full: true })} – ${money(q.high, { full: true })}</td><td class="r">${money(q.open, { full: true })}</td><td class="r"><a class="btn sm secondary" href="#/trade?symbol=${encodeURIComponent(s)}">Trade</a> <button class="btn sm ghost" data-rm="${esc(s)}" aria-label="Remove ${esc(s)}">Remove</button></td></tr>`; }).join('') : '<tr><td colspan="6" class="empty">Your watchlist is empty.</td></tr>';
@@ -572,6 +589,8 @@ const SETTING_GROUPS = [
     ['allowEtf', 'Allow ETFs', 'bool'], ['allowMutualFunds', 'Allow mutual funds', 'bool'],
     ['minStockPrice', 'Minimum price to buy ($)', 'number', null, 'Blocks penny stocks below this price.'],
     ['maxPositionPct', 'Max single position (% of portfolio)', 'number', null, '100 = no diversification rule.'],
+    ['allowCrypto', 'Allow crypto', 'bool', null, 'Bitcoin, Ethereum and more. Trades 24/7 in fractional amounts.'],
+    ['payDividends', 'Pay dividends', 'bool', null, 'Credits each stock’s real dividend yield daily. Shorts pay it.'],
     ['dailyTradeLimit', 'Daily trade limit', 'number', null, '0 = unlimited.'],
   ]],
   ['Options', [
@@ -580,6 +599,7 @@ const SETTING_GROUPS = [
     ['optionCommission', 'Fee per contract ($)', 'number', null, 'Charged on top of the regular commission.'],
   ]],
   ['Players', [
+    ['maxPlayers', 'Maximum players', 'number', null, '0 = unlimited.'],
     ['allowLateEntry', 'Allow late entry', 'bool', null, 'Players can join after the start date.'],
     ['allowReset', 'Allow portfolio resets', 'bool'],
     ['showPortfolios', 'Players can view each other’s portfolios', 'bool'],
@@ -592,7 +612,7 @@ function settingsForm(s, sandbox) {
       : `<label class="field" style="margin-bottom:12px"><span>${label}</span>${type === 'select' ? `<select name="${k}">${opts.map(([v, t]) => `<option value="${v}" ${s[k] === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` : type === 'textarea' ? `<textarea name="${k}" rows="2">${esc(s[k])}</textarea>` : `<input name="${k}" type="${type}" value="${esc(s[k])}" ${type === 'number' ? 'step="any" min="0"' : ''}>`}${hint ? `<div class="hint">${hint}</div>` : ''}</label>`).join('')}</div>`).join('');
 }
 const readForm = form => Object.fromEntries([...form.elements].filter(e => e.name).map(e => [e.name, e.type === 'checkbox' ? e.checked : e.type === 'number' ? +e.value : e.value]));
-const DEFAULTS = { name: '', description: '', privacy: 'public', password: '', startDate: new Date().toLocaleDateString('en-CA'), endDate: '', startingCash: 100000, commissionType: 'flat', commission: 0, cashInterest: 0, allowMargin: false, marginInterest: 8, allowShort: true, minShortPrice: 5, allowLimit: true, allowStop: true, allowTrailing: true, allowEtf: true, allowMutualFunds: false, minStockPrice: 0, maxPositionPct: 100, dailyTradeLimit: 0, allowLateEntry: true, allowReset: true, showPortfolios: true, allowOptions: true, allowOptionWriting: false, optionCommission: 0 };
+const DEFAULTS = { name: '', description: '', privacy: 'public', password: '', startDate: new Date().toLocaleDateString('en-CA'), endDate: '', startingCash: 100000, commissionType: 'flat', commission: 0, cashInterest: 0, allowMargin: false, marginInterest: 8, allowShort: true, minShortPrice: 5, allowLimit: true, allowStop: true, allowTrailing: true, allowEtf: true, allowMutualFunds: false, minStockPrice: 0, maxPositionPct: 100, dailyTradeLimit: 0, allowLateEntry: true, allowReset: true, showPortfolios: true, allowOptions: true, allowOptionWriting: false, optionCommission: 0, allowCrypto: true, payDividends: true, maxPlayers: 0 };
 
 async function viewGames() {
   await loadGames();
@@ -628,17 +648,20 @@ function viewCreateGame() {
 async function viewGame(gid) {
   const { game: g, rankings } = await api('/api/games/' + gid);
   const s = g.settings, link = `${location.origin}${location.pathname}#/games/${g.id}`;
+  const gameForInvite = { id: g.id, settings: s };
   app.innerHTML = `<div class="view"><div class="page-head"><div><a href="#/games" class="small">‹ Games</a><h1>${esc(s.name)}</h1><div class="muted">${esc(s.description)}</div></div>
     <div class="row">${g.joined ? (g.id !== state.gameId ? `<button class="btn" id="use">Make active</button>` : '<span class="badge live">Active game</span>') : `<button class="btn" id="join">Join game</button>`}
       ${g.joined && !g.isOwner && !g.sandbox ? '<button class="btn secondary" id="leave">Leave</button>' : ''}</div></div>
     <div class="grid g4" style="margin-bottom:var(--gap)">${[['Players', g.players], ['Starting cash', money(s.startingCash)], ['Starts', g.sandbox ? '—' : s.startDate], ['Ends', g.sandbox ? '—' : s.endDate || 'No end date']].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value" style="font-size:1.15rem">${v}</div></div>`).join('')}</div>
     <div class="grid g2"><div class="card"><div class="card-head"><h2>Rankings</h2><span class="muted small">Live</span></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Player</th><th class="r">Account value</th><th class="r">Return</th></tr></thead><tbody>
       ${rankings.map(r => `<tr class="${s.showPortfolios || r.userId === state.me.id ? 'link' : ''}" ${s.showPortfolios || r.userId === state.me.id ? `data-go="#/portfolio${r.userId === state.me.id ? '' : '?player=' + r.playerId}"` : ''}><td><span class="rank r${r.rank}">${r.rank}</span></td><td><a href="#/profile/${encodeURIComponent(r.userId)}" class="who">${avatarHtml(r, 28)}<b>${esc(r.name)}</b></a>${r.userId === state.me.id ? ' <span class="badge">You</span>' : ''}</td><td class="r">${money(r.equity)}</td><td class="r ${cls(r.gain)}">${pct(r.gainPct)}</td></tr>`).join('')}</tbody></table></div></div>
-      <div class="stack">${!g.sandbox ? `<div class="card"><h3>Invite players</h3><p class="muted small">Share this link${g.hasPassword ? ' and the game password' : ''}.</p><div class="row" style="flex-wrap:nowrap"><input value="${esc(link)}" readonly id="lnk"><button class="btn secondary sm" id="copy">Copy</button></div><div class="hint">Game ID: ${g.id}</div></div>` : ''}
+      <div class="stack">${!g.sandbox && g.joined ? '<button class="btn" id="invF">Invite friends</button>' : ''}${!g.sandbox ? `<div class="card"><h3>Invite players</h3><p class="muted small">Share this link${g.hasPassword ? ' and the game password' : ''}.</p><div class="row" style="flex-wrap:nowrap"><input value="${esc(link)}" readonly id="lnk"><button class="btn secondary sm" id="copy">Copy</button></div><div class="hint">Game ID: ${g.id}</div></div>` : ''}
         <div class="card small"><h3 style="margin-bottom:6px">Rules</h3><div class="muted">Commission ${s.commission ? (s.commissionType === 'flat' ? money(s.commission) : s.commission + '%') : 'free'} · Short selling ${s.allowShort ? 'on' : 'off'} · Margin ${s.allowMargin ? 'on' : 'off'} · Late entry ${s.allowLateEntry ? 'on' : 'off'} · Resets ${s.allowReset ? 'on' : 'off'} · ${s.privacy === 'public' ? 'Public' : 'Private'}</div></div></div></div>
     ${g.isOwner ? `<h2 style="margin:32px 0 14px">Game settings</h2><form id="sf" class="grid g-half">${settingsForm(s, g.sandbox)}<div class="card" style="align-self:start"><button class="btn block">Save settings</button>${!g.sandbox ? '<button type="button" class="btn danger block" id="del" style="margin-top:10px">Delete game</button>' : ''}</div></form>` : ''}</div>`;
   $('#use')?.addEventListener('click', () => { $('#gameSelect').value = g.id; $('#gameSelect').dispatchEvent(new Event('change')); });
   $('#join')?.addEventListener('click', () => joinGame(g.id, g.hasPassword));
+  $('#invF')?.addEventListener('click', () => F.inviteModal({ game: gameForInvite }));
+  if (!g.sandbox) { const box = document.createElement('div'); box.className = 'card'; box.style.marginTop = 'var(--gap)'; $('.view .grid.g2').after(box); F.mountActivity(box, g); }
   $('#copy')?.addEventListener('click', () => { navigator.clipboard.writeText(link).then(() => toast('Link copied.')); });
   $('#leave')?.addEventListener('click', async () => { await api(`/api/games/${g.id}/leave`, { method: 'POST' }); state.gameId = null; await loadGames(); location.hash = '#/games'; });
   $('#sf')?.addEventListener('submit', async e => { e.preventDefault(); try { await api('/api/games/' + g.id, { method: 'PATCH', body: readForm(e.target) }); await loadGames(); toast('Settings saved.'); route(); } catch (err) { toast(err.message, true); } });
@@ -674,6 +697,7 @@ function viewSettings() {
           <button class="btn ghost sm" id="avRemove">Remove photo</button></div></div>
       <div><div class="muted small" style="font-weight:600;margin-bottom:6px">Colour (used when there’s no photo)</div><div class="swatches">${AVATAR_COLORS.map(c => `<button type="button" data-c="${c}" style="background:${c}" aria-label="Colour ${c}"></button>`).join('')}</div></div>
       <label class="field"><span>Display name</span><input id="pfName" maxlength="40" value="${esc(state.me.name)}" autocomplete="nickname"></label>
+      <label class="field"><span>Username</span><div class="row" style="flex-wrap:nowrap;gap:6px"><span class="muted">@</span><input id="pfHandle" maxlength="20" value="${esc(state.me.handle || '')}" placeholder="pick_a_username" autocomplete="username" spellcheck="false"></div><div class="hint">Friends add you by this. 3–20 letters, numbers or underscores.</div></label>
       <label class="field"><span>Bio</span><textarea id="pfBio" maxlength="160" rows="2" placeholder="Value investor. Options degen. Etc.">${esc(state.me.bio || '')}</textarea><div class="hint"><span id="bioCount">${(state.me.bio || '').length}</span>/160</div></label>
       <button class="btn" id="pfSave" style="align-self:flex-start">Save profile</button></div>
     <div class="card stack" id="securityCard"><h2>Sign-in &amp; security</h2></div>
@@ -701,7 +725,7 @@ function mountAccountSettings() {
   $('#pfBio').oninput = e => { $('#bioCount').textContent = e.target.value.length; };
   $('#pfSave').onclick = async () => {
     const btn = $('#pfSave'); btn.disabled = true;
-    try { state.me = (await api('/api/me/profile', { method: 'PATCH', body: { name: $('#pfName').value, bio: $('#pfBio').value, ...draft } })).user; renderShell(); toast('Profile saved.'); }
+    try { state.me = (await api('/api/me/profile', { method: 'PATCH', body: { name: $('#pfName').value, handle: $('#pfHandle').value, bio: $('#pfBio').value, ...draft } })).user; renderShell(); toast('Profile saved.'); }
     catch (err) { toast(err.message, true); }
     btn.disabled = false;
   };
@@ -768,14 +792,16 @@ async function viewProfile(uid) {
   const best = real.length ? Math.max(...real.map(r => r.gainPct)) : null;
   app.innerHTML = `<div class="view">
     <div class="card"><div class="row" style="gap:20px">${avatarHtml(p, 96)}
-      <div style="flex:1;min-width:200px"><h1>${esc(p.name)}</h1>
+      <div style="flex:1;min-width:200px"><h1>${esc(p.name)}</h1>${p.handle ? `<div class="muted">@${esc(p.handle)}</div>` : ''}
         ${p.bio ? `<p style="margin:6px 0 0">${esc(p.bio)}</p>` : p.self ? '<p class="muted small" style="margin:6px 0 0">No bio yet.</p>' : ''}
         ${p.joined ? `<div class="muted small" style="margin-top:6px">Member since ${new Date(p.joined).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div>` : ''}</div>
-      ${p.self ? '<a class="btn secondary" href="#/settings?edit=profile">Edit profile</a>' : ''}</div></div>
+      ${p.self ? '<a class="btn secondary" href="#/settings?edit=profile">Edit profile</a>' : `<button class="btn" id="chal">Challenge</button>`}</div></div>
     <div class="grid g3" style="margin-top:var(--gap)">${[['Games', real.length], ['Best return', best == null ? '—' : `<span class="${cls(best)}">${pct(best)}</span>`], ['Trades', p.results.reduce((a, r) => a + r.trades, 0)]].map(([l, v]) => `<div class="card stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}</div>
+    <div class="card" style="margin-top:var(--gap)"><div class="card-head"><h2>Badges</h2><span class="muted small">${Object.keys(p.badges || {}).length} of ${F.BADGE_COUNT}</span></div>${F.badgesHtml(p.badges || {})}</div>
     <div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:8px">Games</h2>
       ${p.results.length ? `<div class="table-wrap"><table><thead><tr><th>Game</th><th class="r">Account value</th><th class="r">Return</th><th class="r">Trades</th><th class="r">Positions</th></tr></thead><tbody>
       ${p.results.map(r => `<tr class="link" data-go="#/games/${r.gameId}"><td><b>${esc(r.game)}</b>${r.sandbox ? ' <span class="badge">Practice</span>' : ''}</td><td class="r">${money(r.equity)}</td><td class="r ${cls(r.gainPct)}">${pct(r.gainPct)}</td><td class="r">${r.trades}</td><td class="r">${r.positions}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Not in any games yet.</div>'}</div></div>`;
+  $('#chal')?.addEventListener('click', () => F.challengeModal({ id: p.id, name: p.name }));
 }
 
 // ---------- router ----------
@@ -798,10 +824,17 @@ async function route() {
     else if (path === '/games/new') viewCreateGame();
     else if (path.startsWith('/games/')) await viewGame(path.split('/')[2]);
     else if (path === '/settings') viewSettings();
+    else if (path === '/alerts') await F.viewAlerts(q);
+    else if (path === '/screener') await F.viewScreener();
+    else if (path === '/leaderboard') await F.viewLeaderboard();
+    else if (path === '/friends') await F.viewFriends();
+    else if (path === '/lessons') F.viewLessons();
+    else if (path.startsWith('/lessons/')) await F.viewLesson(path.split('/')[2]);
     else if (path === '/profile') await viewProfile();
     else if (path.startsWith('/profile/')) await viewProfile(decodeURIComponent(path.split('/')[2]));
     else location.hash = '#/';
   } catch (e) { app.innerHTML = `<div class="card empty view">${esc(e.message)}<br><a href="#/" class="btn sm" style="margin-top:12px">Go to dashboard</a></div>`; }
 }
 window.addEventListener('hashchange', route);
+export { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route };
 route();
