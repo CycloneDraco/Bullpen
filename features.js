@@ -518,7 +518,7 @@ export function renderAnalytics(pane, pf, g) {
 }
 
 // ---------- keyboard shortcuts ----------
-const SHORTCUTS = [['/', 'Search symbols'], ['g then d', 'Dashboard'], ['g then p', 'Portfolio'], ['g then t', 'Trade'], ['g then r', 'Research'], ['g then s', 'Screener'], ['g then w', 'Watchlist'], ['g then g', 'Games'], ['g then b', 'Leaderboard'], ['g then f', 'Friends'], ['g then l', 'Lessons'], ['b / s', 'Buy / sell the symbol you’re viewing'], ['o', 'Options for the symbol you’re viewing'], ['a', 'Set a price alert'], ['n', 'Notifications'], ['?', 'Show this list']];
+const SHORTCUTS = [['/', 'Search symbols'], ['g then d', 'Dashboard'], ['g then p', 'Portfolio'], ['g then t', 'Trade'], ['g then r', 'Research'], ['g then s', 'Screener'], ['g then w', 'Watchlist'], ['g then g', 'Games'], ['g then b', 'Leaderboard'], ['g then f', 'Friends'], ['g then l', 'Lessons'], ['b / s', 'Buy / sell the symbol you’re viewing'], ['o', 'Options for the symbol you’re viewing'], ['a', 'Set a price alert'], ['n', 'Notifications'], ['[', 'Open or close the sidebar'], ['?', 'Show this list']];
 const GO = { d: '#/', p: '#/portfolio', t: '#/trade', r: '#/research', s: '#/screener', w: '#/watchlist', g: '#/games', b: '#/leaderboard', f: '#/friends', l: '#/lessons' };
 export function mountShortcuts() {
   let pendingG = 0;

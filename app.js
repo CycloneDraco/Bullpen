@@ -139,7 +139,7 @@ function symbolSearch(input, onPick) {
 function every(ms, fn) { const t = setInterval(fn, ms); state.timers.push(t); }
 function setActiveTab() {
   const h = location.hash.split('?')[0].replace('#', '') || '/';
-  $$('#tabs a').forEach(a => { const p = a.getAttribute('href').slice(1); a.classList.toggle('active', p === '/' ? h === '/' : h.startsWith(p)); });
+  $$('#side a').forEach(a => { const p = a.getAttribute('href').slice(1); a.classList.toggle('active', p === '/' ? h === '/' : h.startsWith(p)); });
 }
 async function loadGames() {
   state.games = await api('/api/games');
@@ -150,9 +150,27 @@ async function loadGames() {
   sel.innerHTML = state.games.mine.map(g => `<option value="${g.id}" ${g.id === state.gameId ? 'selected' : ''}>${esc(g.settings.name)}</option>`).join('');
 }
 const activeGame = () => state.games.mine.find(g => g.id === state.gameId);
+// Sidebar: beside the page on wide screens (remembered), a drawer on narrow ones.
+const wide = matchMedia('(min-width: 1000px)');
+function setSide(open, remember) {
+  document.body.classList.toggle('side-open', open);
+  const t = $('#sideToggle'); t.setAttribute('aria-expanded', open); t.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  if (remember && wide.matches) try { localStorage.setItem('bp_side', open ? 'open' : 'closed'); } catch {}
+  if (open && !wide.matches) $('#side a.active, #side a')?.focus({ preventScroll: true });
+}
+function initSide() { let saved; try { saved = localStorage.getItem('bp_side'); } catch {} setSide(wide.matches && saved !== 'closed'); }
+$('#sideToggle').addEventListener('click', () => setSide(!document.body.classList.contains('side-open'), true));
+$('#sideScrim').addEventListener('click', () => setSide(false));
+$('#side').addEventListener('click', e => { if (e.target.closest('a') && !wide.matches) setSide(false); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !wide.matches && document.body.classList.contains('side-open')) { setSide(false); $('#sideToggle').focus(); }
+  if (e.key === '[' && state.me && !e.target.closest('input, textarea, select') && !e.metaKey && !e.ctrlKey) setSide(!document.body.classList.contains('side-open'), true);
+});
+wide.addEventListener('change', initSide);
 let shellMounted = false;
 function renderShell() {
-  $('#nav').hidden = false;
+  $('#nav').hidden = false; $('#side').hidden = false;
+  if (!shellMounted) initSide();
   if (!shellMounted) {
     shellMounted = true; F.mountBell(); F.mountShortcuts();
     // Global search: look up any symbol without leaving to trade.
@@ -170,7 +188,7 @@ $('#gameSelect').addEventListener('change', e => { state.gameId = e.target.value
 
 // ---------- sign in ----------
 function viewSignIn() {
-  $('#nav').hidden = true;
+  $('#nav').hidden = true; $('#side').hidden = true; document.body.classList.remove('side-open');
   const google = store.mode === 'firebase';
   app.innerHTML = `<section class="hero view"><div class="hero-card">
     <img src="icon.svg" width="72" height="72" alt="">
