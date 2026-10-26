@@ -1,7 +1,7 @@
 // In-browser backend: the same /api routes the old Node server had, backed by
 // store.js (Firebase or localStorage) and Finnhub for live prices.
-import CONFIG from './config.js';
-import { store } from './store.js';
+import CONFIG from './config.js?v=20261026115004';
+import { store } from './store.js?v=20261026115004';
 export { store };
 
 const FH = CONFIG.finnhubBase || 'https://finnhub.io/api/v1';

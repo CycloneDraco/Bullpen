@@ -4,8 +4,8 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function game(gid) { return /databases/$(database)/documents/games/$(gid); }
-    // Admins: add a document admins/{your user ID} in the Firebase console. The app can't create these.
-    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    // Admins: the site owner's account, plus any admins/{user ID} document added in the Firebase console.
+    function isAdmin() { return signedIn() && (request.auth.uid in ['9Eq5tSMVDRX4JQT9zgs4vLGBjnr2'] || exists(/databases/$(database)/documents/admins/$(request.auth.uid))); }
 
     match /admins/{uid} {
       allow read: if request.auth.uid == uid;

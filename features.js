@@ -1,7 +1,7 @@
 // Bullpen feature views: alerts, news, screener, leaderboard, friends, game activity,
 // badges, option strategies, portfolio analytics, tooltips and keyboard shortcuts.
-import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route, loadGames } from './app.js';
-import { BADGES, CRYPTO, isCrypto, checkAlerts } from './backend.js';
+import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route, loadGames } from './app.js?v=20261026115004';
+import { BADGES, CRYPTO, isCrypto, checkAlerts } from './backend.js?v=20261026115004';
 
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : when(t); };
 const qtyFmt = n => (+n).toLocaleString(undefined, { maximumFractionDigits: 6 });

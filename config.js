@@ -12,6 +12,9 @@ export default {
     appId: '1:404868296563:web:6f147a521d821b33019f06',
   },
 
+  // Accounts that can use admin mode. Must match the list in firestore.rules.
+  adminUids: ['9Eq5tSMVDRX4JQT9zgs4vLGBjnr2'],
+
   // Free key from https://finnhub.io/register (live prices and symbol search).
   finnhubKey: 'dbfmqo9r01qiahu9u3ugdbfmqo9r01qiahu9u3v0',
 };

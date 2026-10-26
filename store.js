@@ -1,6 +1,6 @@
 // Storage + auth adapters. Firebase (Google sign-in, shared Firestore) when configured,
 // otherwise an offline adapter that keeps everything in this browser's localStorage.
-import CONFIG from './config.js';
+import CONFIG from './config.js?v=20261026115004';
 
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 
@@ -41,10 +41,11 @@ async function firebaseStore(cfg) {
     deleteAuthUser: () => A.deleteUser(auth.currentUser).then(() => { user = null; }),
     getProfile: async uid => data(await F.getDoc(d('profiles', uid))),
     // Admins are listed in admins/{uid}, which can only be created from the Firebase console.
-    isAdmin: async uid => (await F.getDoc(d('admins', uid))).exists(),
+    isAdmin: async uid => { const s = await F.getDoc(d('admins', uid)); return s.exists() || (CONFIG.adminUids || []).includes(uid); },
     // Why admin isn't active: 'yes', 'missing' (no admins/{uid} doc) or 'rules' (old rules block the check).
     async adminStatus(uid) {
-      try { return (await F.getDoc(d('admins', uid))).exists() ? 'yes' : 'missing'; }
+      // Reading your own admins/ entry only works once the current rules are published.
+      try { const s = await F.getDoc(d('admins', uid)); return s.exists() || (CONFIG.adminUids || []).includes(uid) ? 'yes' : 'missing'; }
       catch (e) { return e.code === 'permission-denied' ? 'rules' : 'error: ' + (e.code || e.message); }
     },
     listProfiles: async () => (await F.getDocs(F.collection(db, 'profiles'))).docs.map(data),

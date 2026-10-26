@@ -40,7 +40,10 @@ Until you do this, the site runs in **offline mode**: you sign in with just a na
 Crypto (24/7, fractional), daily dividends, option strategies with payoff charts, price alerts and notifications, market and company news, earnings dates, a screener, a global leaderboard, friends with @usernames, game invites and head-to-head challenges, a game activity feed with comments, badges, portfolio analytics against the S&P 500, and keyboard shortcuts (press `?`).
 
 ## Admin mode
-Click **Settings** 10 times quickly (in the sidebar, the account menu, or the page title) to reveal an admin password box under Delete account. The password only unlocks the admin screens. Firebase grants the actual permissions, and only to accounts listed in the `admins` collection. To add yourself: Firebase console → Firestore Database → Data → Start collection `admins` → Document ID = your user ID (the app shows it when you unlock) → add any field → Save. Then publish the latest `firestore.rules`.
+Click **Settings** 10 times quickly (in the sidebar, the account menu, or the page title) to reveal an admin password box under Delete account. The password only unlocks the admin screens. Firebase grants the actual permissions, and only to admin accounts: the owner account listed in both `config.js` (`adminUids`) and `firestore.rules`, plus any `admins/{user ID}` document added in the Firebase console. Publish the latest `firestore.rules` for it to take effect.
+
+## Updating the site
+Run `python3 tools/stamp.py` before committing. It tags every file reference with a new version so visitors' browsers load the new code instead of a cached copy.
 
 ## Limits
 - With no server, pending limit/stop orders and price alerts are checked only while their owner has Bullpen open. When they reopen it, orders are checked against the current price, not prices from while they were away.

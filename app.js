@@ -1,8 +1,8 @@
 // Bullpen front end — vanilla JS single-page app with hash routing.
-import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut, account } from './backend.js';
-import CONFIG from './config.js';
-import { tvSymbol, isCrypto } from './backend.js';
-import * as F from './features.js';
+import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut, account } from './backend.js?v=20261026115004';
+import CONFIG from './config.js?v=20261026115004';
+import { tvSymbol, isCrypto } from './backend.js?v=20261026115004';
+import * as F from './features.js?v=20261026115004';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const app = $('#app');
