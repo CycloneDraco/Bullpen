@@ -530,8 +530,8 @@ export function mountShortcuts() {
     if (e.key === 'g') { pendingG = Date.now(); return; }
     if (e.key === '/') {
       e.preventDefault();
-      const box = $('#rs, #osym, #ssym, #tf input[name=symbol], #add, #sq');
-      if (box) { box.focus(); box.select?.(); } else { location.hash = '#/research'; setTimeout(() => $('#rs')?.focus(), 300); }
+      const box = $('#gsearch');
+      box.focus(); box.select();
     } else if ((e.key === 'b' || e.key === 's') && sym) location.hash = `#/trade?symbol=${encodeURIComponent(sym)}&action=${e.key === 'b' ? 'buy' : 'sell'}`;
     else if (e.key === 'o' && sym && !isCrypto(sym)) location.hash = `#/trade?asset=option&symbol=${encodeURIComponent(sym)}`;
     else if (e.key === 'a') location.hash = '#/alerts' + (sym ? `?symbol=${encodeURIComponent(sym)}` : '');

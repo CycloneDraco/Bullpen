@@ -153,7 +153,11 @@ const activeGame = () => state.games.mine.find(g => g.id === state.gameId);
 let shellMounted = false;
 function renderShell() {
   $('#nav').hidden = false;
-  if (!shellMounted) { shellMounted = true; F.mountBell(); F.mountShortcuts(); $('#kbdHelp').onclick = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: '?' })); }
+  if (!shellMounted) {
+    shellMounted = true; F.mountBell(); F.mountShortcuts();
+    // Global search: look up any symbol without leaving to trade.
+    const gs = $('#gsearch');
+    symbolSearch(gs, sym => { gs.value = ''; gs.blur(); location.hash = '#/research?symbol=' + encodeURIComponent(sym); }); $('#kbdHelp').onclick = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: '?' })); }
   const u = state.me, av = $('#avatarBtn');
   av.innerHTML = avatarHtml(u, 32);
   av.setAttribute('aria-label', 'Account: ' + u.name);
