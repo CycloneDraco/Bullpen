@@ -752,6 +752,21 @@ async function viewGame(gid) {
 }
 
 // ---------- settings ----------
+// Hidden admin unlock: tap "Settings" 10 times quickly, in the sidebar, the account menu or the page title.
+let adminTaps = [], showAdminBox = false;
+function revealAdminBox() {
+  showAdminBox = true;
+  const box = $('#adminBox'); if (!box) return;
+  box.hidden = false; box.scrollIntoView({ block: 'center' }); $('input', box)?.focus({ preventScroll: true });
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#side a[href="#/settings"], #avatarMenu a[href="#/settings"], #setTitle')) return;
+  adminTaps = [...adminTaps.filter(t => Date.now() - t < 5000), Date.now()];
+  if (adminTaps.length < 10) return;
+  adminTaps = [];
+  if (location.hash.split('?')[0] === '#/settings' && $('#adminBox')) revealAdminBox();
+  else { showAdminBox = true; location.hash = '#/settings'; }
+});
 function viewSettings() {
   const p = prefs();
   const seg = (k, opts) => `<div class="seg" data-k="${k}">${opts.map(([v, t]) => `<button type="button" data-v="${v}" class="${(p[k] ?? opts[0][0]) === v ? 'on' : ''}">${t}</button>`).join('')}</div>`;
@@ -793,13 +808,7 @@ function viewSettings() {
   $$('input[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.checked }).then(() => toast('Saved.')));
   $$('select[data-k]').forEach(i => i.onchange = () => savePrefs({ [i.dataset.k]: i.value || null }).then(() => toast('Saved.')));
   mountAccountSettings();
-  // Hidden admin unlock: click the Settings title 10 times quickly.
-  let taps = [];
-  $('#setTitle').addEventListener('click', () => {
-    taps = [...taps.filter(t => Date.now() - t < 4000), Date.now()];
-    if (taps.length >= 10) { taps = []; $('#adminBox').hidden = false; $('#adminBox input')?.focus(); $('#adminBox').scrollIntoView({ block: 'center' }); }
-  });
-  if (state.me.admin) $('#adminBox').hidden = false;
+  if (state.me.admin || showAdminBox) revealAdminBox();
   $('#adminBox').onsubmit = async e => {
     e.preventDefault();
     try {
