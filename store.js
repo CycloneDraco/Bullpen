@@ -1,6 +1,6 @@
 // Storage + auth adapters. Firebase (Google sign-in, shared Firestore) when configured,
 // otherwise an offline adapter that keeps everything in this browser's localStorage.
-import CONFIG from './config.js?v=20261026115004';
+import CONFIG from './config.js?v=20261026125806';
 
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 
@@ -49,6 +49,10 @@ async function firebaseStore(cfg) {
       catch (e) { return e.code === 'permission-denied' ? 'rules' : 'error: ' + (e.code || e.message); }
     },
     listProfiles: async () => (await F.getDocs(F.collection(db, 'profiles'))).docs.map(data),
+    // Admin: whole-record access (rules allow these only for admins).
+    listUsers: async () => (await F.getDocs(F.collection(db, 'users'))).docs.map(data),
+    replaceUser: (uid, u) => F.setDoc(d('users', uid), u),
+    replaceGame: (gid, g) => F.setDoc(d('games', gid), g),
     listAllGames: async () => (await F.getDocs(F.collection(db, 'games'))).docs.map(data),
     saveProfile: (uid, p) => F.setDoc(d('profiles', uid), p, { merge: true }),
     deleteUserDocs: uid => Promise.all([F.deleteDoc(d('users', uid)), F.deleteDoc(d('profiles', uid))]),
@@ -143,6 +147,9 @@ function localStore() {
     adminStatus: async () => 'yes',
     listProfiles: async () => Object.entries(db.users).map(([id, u]) => clone({ id, name: u.name, picture: u.picture, bio: u.bio, color: u.color, joined: u.joined, handle: u.handle, badges: u.badges })),
     listAllGames: async () => Object.values(db.games).map(clone),
+    listUsers: async () => Object.entries(db.users).map(([id, u]) => clone({ id, ...u })),
+    async replaceUser(uid, u) { db.users[uid] = clone(u); persist(); },
+    async replaceGame(gid, g) { db.games[gid] = clone({ ...g, id: gid }); persist(); },
     async deleteUserDocs(uid) { delete db.users[uid]; if (db.session === uid) db.session = null; persist(); },
     async addActivity(gid, item) { ((db.activity ||= {})[gid] ||= []).unshift(clone(item)); persist(); },
     listActivity: async (gid, n = 80) => clone((db.activity?.[gid] || []).slice(0, n)),

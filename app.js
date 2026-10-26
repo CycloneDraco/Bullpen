@@ -1,8 +1,8 @@
 // Bullpen front end — vanilla JS single-page app with hash routing.
-import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut, account } from './backend.js?v=20261026115004';
-import CONFIG from './config.js?v=20261026115004';
-import { tvSymbol, isCrypto } from './backend.js?v=20261026115004';
-import * as F from './features.js?v=20261026115004';
+import { api as backend, store, signIn, signInEmail, signUpEmail, resetPassword, signOut, account } from './backend.js?v=20261026125806';
+import CONFIG from './config.js?v=20261026125806';
+import { tvSymbol, isCrypto } from './backend.js?v=20261026125806';
+import * as F from './features.js?v=20261026125806';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const app = $('#app');
@@ -951,6 +951,8 @@ async function route() {
     else if (path.startsWith('/games/')) await viewGame(path.split('/')[2]);
     else if (path === '/settings') viewSettings();
     else if (path === '/admin') await F.viewAdmin(q);
+    else if (path.startsWith('/admin/user/')) await F.viewAdminUser(decodeURIComponent(path.split('/')[3]));
+    else if (path.startsWith('/admin/portfolio/')) await F.viewAdminPortfolio(path.split('/')[3], decodeURIComponent(path.split('/')[4]));
     else if (path === '/alerts') await F.viewAlerts(q);
     else if (path === '/screener') await F.viewScreener();
     else if (path === '/leaderboard') await F.viewLeaderboard();

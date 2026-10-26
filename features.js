@@ -1,7 +1,7 @@
 // Bullpen feature views: alerts, news, screener, leaderboard, friends, game activity,
 // badges, option strategies, portfolio analytics, tooltips and keyboard shortcuts.
-import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route, loadGames } from './app.js?v=20261026115004';
-import { BADGES, CRYPTO, isCrypto, checkAlerts } from './backend.js?v=20261026115004';
+import { $, $$, esc, api, money, signed, pct, cls, when, toast, modal, avatarHtml, state, prefs, activeGame, symbolSearch, enterGame, route, loadGames } from './app.js?v=20261026125806';
+import { BADGES, CRYPTO, isCrypto, checkAlerts } from './backend.js?v=20261026125806';
 
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : when(t); };
 const qtyFmt = n => (+n).toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -220,7 +220,7 @@ export async function mountActivity(host, game) {
     const top = items.filter(i => !i.replyTo), replies = id => items.filter(i => i.replyTo === id).sort((a, b) => a.created - b.created);
     const row = (i, nested) => `<div class="act ${nested ? 'reply' : ''}">${avatarHtml(i, nested ? 26 : 34)}<div style="flex:1;min-width:0">
       <div><a href="#/profile/${encodeURIComponent(i.userId)}"><b>${esc(i.name)}</b></a> <span class="${i.type === 'comment' ? '' : 'muted'}">${esc(i.text)}</span></div>
-      <div class="muted small">${ago(i.created)}${game.joined && !nested ? ` · <a href="#" data-reply="${i.id}">Reply</a>` : ''}${i.userId === state.me.id ? ` · <a href="#" data-del="${i.id}">Delete</a>` : ''}</div>
+      <div class="muted small">${ago(i.created)}${game.joined && !nested ? ` · <a href="#" data-reply="${i.id}">Reply</a>` : ''}${i.userId === state.me.id || state.me.admin ? ` · <a href="#" data-del="${i.id}">Delete</a>` : ''}</div>
       ${nested ? '' : replies(i.id).map(r => row(r, true)).join('')}<div data-box="${i.id}"></div></div></div>`;
     host.innerHTML = `<div class="card-head"><h2>Activity</h2><span class="muted small">Trades, joins and chat</span></div>
       ${game.joined ? '<form id="post" class="row" style="flex-wrap:nowrap;margin-bottom:12px"><input name="t" placeholder="Say something to the group…" maxlength="500" aria-label="Write a comment" style="flex:1"><button class="btn sm">Post</button></form>' : ''}
@@ -448,7 +448,7 @@ export async function viewAdmin(q) {
     $('#alist').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Player</th><th>Email</th><th>Joined</th><th></th></tr></thead><tbody>
       ${users.map(u => `<tr><td><a class="who" href="#/profile/${encodeURIComponent(u.id)}">${avatarHtml(u, 30)}<span><b>${esc(u.name || 'Unnamed')}</b>${u.handle ? `<div class="muted small">@${esc(u.handle)}</div>` : ''}</span></a></td>
         <td class="muted">${esc(u.email || '—')}</td><td class="muted">${u.joined ? new Date(u.joined).toLocaleDateString() : '—'}</td>
-        <td class="r"><button class="btn sm secondary" data-edit="${u.id}">Edit</button> <button class="btn sm danger" data-del="${u.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td class="r"><a class="btn sm" href="#/admin/user/${encodeURIComponent(u.id)}">Manage</a> <button class="btn sm secondary" data-edit="${u.id}">Edit profile</button> <button class="btn sm danger" data-del="${u.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="4" class="empty">No players yet.</td></tr>'}</tbody></table></div>`;
     $$('[data-edit]').forEach(b => b.onclick = () => {
       const u = users.find(x => x.id === b.dataset.edit);
       modal(`<h2>Edit ${esc(u.name)}</h2><div class="stack">
@@ -477,7 +477,11 @@ export async function viewAdmin(q) {
     $('#alist').innerHTML = `<div class="table-wrap"><table><thead><tr><th>Game</th><th>Creator</th><th class="r">Players</th><th>Status</th><th></th></tr></thead><tbody>
       ${games.map(g => `<tr><td><a href="#/games/${g.id}"><b>${esc(g.name)}</b></a>${g.practice ? ' <span class="badge">Practice</span>' : g.privacy === 'private' ? ' <span class="badge">Private</span>' : ''}</td><td>${esc(g.ownerName)}</td><td class="r">${g.players}</td>
         <td><span class="badge ${g.active ? 'live' : ''}">${g.active ? 'Active' : 'Inactive'}</span></td>
-        <td class="r"><button class="btn sm secondary" data-pl="${g.id}">Players</button> <a class="btn sm secondary" href="#/games/${g.id}">Settings</a> <button class="btn sm danger" data-gdel="${g.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td class="r"><button class="btn sm secondary" data-pl="${g.id}">Players</button> <a class="btn sm secondary" href="#/games/${g.id}">Settings</a> <button class="btn sm secondary" data-graw="${g.id}">Raw data</button> <button class="btn sm danger" data-gdel="${g.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+    $$('[data-graw]').forEach(b => b.onclick = async () => {
+      const doc = await api(`/api/admin/games/${b.dataset.graw}/doc`);
+      rawEditor(`Game: ${games.find(g => g.id === b.dataset.graw).name}`, doc, data => api(`/api/admin/games/${b.dataset.graw}/doc`, { method: 'PUT', body: { data } }));
+    });
     $$('[data-pl]').forEach(b => b.onclick = () => adminPlayers(games.find(g => g.id === b.dataset.pl)));
     $$('[data-gdel]').forEach(b => b.onclick = () => {
       const g = games.find(x => x.id === b.dataset.gdel);
@@ -493,14 +497,109 @@ async function adminPlayers(g) {
   modal(`<h2>${esc(g.name)}</h2><div class="admin-players">${players.map(p => `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
       ${avatarHtml(p, 30)}<div style="flex:1;min-width:120px"><b>${esc(p.name)}</b><div class="muted small">Value ${money(p.equity)} · cash ${money(p.cash)} · ${p.trades} trades</div></div>
       <input type="number" step="any" value="${p.cash.toFixed(2)}" data-cash="${p.userId}" aria-label="Cash for ${esc(p.name)}" style="width:130px">
-      <button class="btn sm secondary" data-set="${p.userId}">Set cash</button><button class="btn sm secondary" data-reset="${p.userId}">Reset</button>${p.userId !== g.owner ? `<button class="btn sm danger" data-kick="${p.userId}">Remove</button>` : ''}</div>`).join('') || '<div class="empty">No players.</div>'}</div>
+      <a class="btn sm" href="#/admin/portfolio/${g.id}/${encodeURIComponent(p.userId)}">Edit portfolio</a><button class="btn sm secondary" data-set="${p.userId}">Set cash</button><button class="btn sm secondary" data-reset="${p.userId}">Reset</button>${p.userId !== g.owner ? `<button class="btn sm danger" data-kick="${p.userId}">Remove</button>` : ''}</div>`).join('') || '<div class="empty">No players.</div>'}</div>
     <div class="actions"><button class="btn" data-x>Done</button></div>`, (el, close) => {
     $('[data-x]', el).onclick = close;
+    $$('a[href^="#/admin/portfolio"]', el).forEach(a => a.addEventListener('click', close));
     const act = async (uid, init, msg) => { try { await api(`/api/admin/games/${g.id}/players/${uid}`, init); toast(msg); close(); adminPlayers(g); } catch (err) { toast(err.message, true); } };
     $$('[data-set]', el).forEach(b => b.onclick = () => act(b.dataset.set, { method: 'PATCH', body: { cash: +$(`[data-cash="${b.dataset.set}"]`, el).value } }, 'Cash updated.'));
     $$('[data-reset]', el).forEach(b => b.onclick = () => act(b.dataset.reset, { method: 'PATCH', body: { reset: true } }, 'Portfolio reset.'));
     $$('[data-kick]', el).forEach(b => b.onclick = () => act(b.dataset.kick, { method: 'DELETE' }, 'Player removed.'));
   });
+}
+
+// Raw record editor: JSON in a textarea, validated before saving.
+function rawEditor(title, doc, save) {
+  modal(`<h2>${esc(title)}</h2><p class="muted small" style="margin-top:0">Every field of the stored record. Changes save exactly as written, so be careful.</p>
+    <textarea id="rawJson" class="raw" spellcheck="false" aria-label="Record data">${esc(JSON.stringify(doc, null, 2))}</textarea><div class="hint" id="rawErr"></div>
+    <div class="actions"><button class="btn secondary" data-x>Cancel</button><button class="btn" data-ok>Save</button></div>`, (el, close) => {
+    el.classList.add('sheet-wide');
+    $('[data-x]', el).onclick = close;
+    $('[data-ok]', el).onclick = async () => {
+      let data; try { data = JSON.parse($('#rawJson', el).value); } catch (e) { $('#rawErr', el).innerHTML = `<span class="down">Not valid JSON: ${esc(e.message)}</span>`; return; }
+      try { await save(data); close(); toast('Saved.'); route(); } catch (err) { $('#rawErr', el).innerHTML = `<span class="down">${esc(err.message)}</span>`; }
+    };
+  });
+}
+
+// One account, everything about it.
+export async function viewAdminUser(uid) {
+  if (!state.me.admin) { location.hash = '#/admin'; return; }
+  const d = await api('/api/admin/users/' + encodeURIComponent(uid)), r = d.record, who = { ...r, ...d.profile, id: uid };
+  const alerts = r.alerts || [], notes = r.notifications || [], badges = r.badges || {}, friends = r.friends || [];
+  app().innerHTML = `<div class="view"><a href="#/admin" class="small">‹ Admin</a>
+    <div class="card" style="margin-top:12px"><div class="row" style="gap:16px">${avatarHtml(who, 64)}<div style="flex:1;min-width:200px"><h1 style="font-size:1.6rem">${esc(who.name || 'Unnamed')}</h1>
+      <div class="muted small">${who.handle ? '@' + esc(who.handle) + ' · ' : ''}${esc(r.email || 'no email')} · last seen ${r.lastLogin ? when(r.lastLogin) : 'never'}</div><div class="muted small" style="font-family:ui-monospace,monospace">${esc(uid)}</div></div>
+      <a class="btn secondary sm" href="#/profile/${encodeURIComponent(uid)}">Public profile</a><button class="btn secondary sm" id="rawUser">Raw data</button></div></div>
+    <div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:8px">Portfolios</h2>${d.games.length ? `<div class="table-wrap"><table><thead><tr><th>Game</th><th class="r">Cash</th><th class="r">Account value</th><th class="r">Positions</th><th class="r">Open orders</th><th></th></tr></thead><tbody>
+      ${d.games.map(g => `<tr><td><b>${esc(g.name)}</b>${g.practice ? ' <span class="badge">Practice</span>' : g.owner ? ' <span class="badge">Creator</span>' : ''}</td><td class="r">${money(g.cash)}</td><td class="r">${money(g.equity)}</td><td class="r">${g.positions}</td><td class="r">${g.orders}</td>
+        <td class="r"><a class="btn sm" href="#/admin/portfolio/${g.gameId}/${encodeURIComponent(uid)}">Edit portfolio</a></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Not in any games.</div>'}</div>
+    <div class="grid g-half" style="margin-top:var(--gap)">
+      <div class="card stack"><h2>Watchlist</h2><textarea id="aWatch" rows="3" aria-label="Watchlist symbols">${esc((r.watchlist || []).join(', '))}</textarea><div class="hint">Comma-separated symbols.</div><button class="btn sm" id="saveWatch" style="align-self:flex-start">Save watchlist</button></div>
+      <div class="card stack"><h2>Badges</h2><div class="admin-badges">${BADGES.map(([id, icon, name]) => `<label class="switch"><div class="t">${icon} ${esc(name)}</div><input type="checkbox" data-badge="${id}" ${badges[id] ? 'checked' : ''}></label>`).join('')}</div><button class="btn sm" id="saveBadges" style="align-self:flex-start">Save badges</button></div>
+      <div class="card"><h2 style="margin-bottom:8px">Price alerts</h2>${alerts.length ? `<table><tbody>${alerts.map(a => `<tr><td class="sym">${esc(a.symbol)}</td><td>${esc(a.op)} ${a.value}</td><td>${a.triggered ? 'triggered' : 'watching'}</td><td class="r"><button class="btn sm ghost" data-alert="${a.id}">Delete</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty small">None.</div>'}</div>
+      <div class="card"><div class="card-head"><h2>Notifications</h2>${notes.length ? '<button class="btn sm secondary" id="clearNotes">Clear all</button>' : ''}</div>${notes.length ? `<div class="muted small">${notes.slice(0, 8).map(n => esc(n.text)).join('<br>')}${notes.length > 8 ? `<br>…and ${notes.length - 8} more` : ''}</div>` : '<div class="empty small">None.</div>'}</div>
+      <div class="card"><h2 style="margin-bottom:8px">Friends</h2>${friends.length ? friends.map(f => `<div class="row" style="padding:4px 0"><span style="flex:1;font-family:ui-monospace,monospace;font-size:.82rem">${esc(f)}</span><a class="btn sm ghost" href="#/admin/user/${encodeURIComponent(f)}">Open</a><button class="btn sm ghost" data-unfriend="${esc(f)}">Remove</button></div>`).join('') : '<div class="empty small">None.</div>'}</div>
+    </div></div>`;
+  const saveData = async (body, msg) => { try { await api(`/api/admin/users/${encodeURIComponent(uid)}/data`, { method: 'PATCH', body }); toast(msg); route(); } catch (err) { toast(err.message, true); } };
+  $('#saveWatch').onclick = () => saveData({ watchlist: $('#aWatch').value.split(/[\s,]+/) }, 'Watchlist saved.');
+  $('#saveBadges').onclick = () => saveData({ badges: Object.fromEntries($$('[data-badge]').filter(c => c.checked).map(c => [c.dataset.badge, badges[c.dataset.badge] || Date.now()])) }, 'Badges saved.');
+  $$('[data-alert]').forEach(b => b.onclick = () => saveData({ alerts: alerts.filter(a => a.id !== b.dataset.alert) }, 'Alert deleted.'));
+  $('#clearNotes')?.addEventListener('click', () => saveData({ notifications: [] }, 'Notifications cleared.'));
+  $$('[data-unfriend]').forEach(b => b.onclick = () => saveData({ friends: friends.filter(f => f !== b.dataset.unfriend) }, 'Friend removed.'));
+  $('#rawUser').onclick = () => rawEditor(`Account: ${who.name || uid}`, r, data => api(`/api/admin/users/${encodeURIComponent(uid)}/doc`, { method: 'PUT', body: { data } }));
+}
+
+// Edit any portfolio: cash, holdings, options, open orders and history.
+export async function viewAdminPortfolio(gid, uid) {
+  if (!state.me.admin) { location.hash = '#/admin'; return; }
+  const { doc, game, value } = await api(`/api/admin/games/${gid}/players/${encodeURIComponent(uid)}/doc`);
+  const p = JSON.parse(JSON.stringify(doc));
+  p.options ||= {}; p.orders ||= []; p.history ||= [];
+  const draw = () => {
+    const holdings = Object.entries(p.positions), opts = Object.entries(p.options);
+    app().innerHTML = `<div class="view"><a href="#/admin/user/${encodeURIComponent(uid)}" class="small">‹ ${esc(p.name || 'Player')}</a>
+      <div class="page-head" style="margin-top:8px"><div><h1>${esc(p.name || 'Player')}’s portfolio</h1><div class="muted small">${esc(game.name)} · starting cash ${money(game.startingCash)} · current value ${money(value.equity)}</div></div>
+        <div class="row"><button class="btn secondary" id="pRaw">Raw data</button><button class="btn" id="pSave">Save changes</button></div></div>
+      <div class="grid g-half"><div class="card stack"><h2>Cash</h2><label class="field"><span>Cash balance ($)</span><input id="pCash" type="number" step="any" value="${p.cash}"></label>
+        <div class="row"><button class="btn sm secondary" data-cashset="${game.startingCash}">Set to starting cash</button><button class="btn sm secondary" id="pReset">Reset whole portfolio</button></div></div>
+        <div class="card stack"><h2>Add a holding</h2><div class="row add-row"><input id="nSym" placeholder="Symbol (AAPL, BTC-USD)" class="wide"><input id="nQty" type="number" step="any" placeholder="Qty"><input id="nAvg" type="number" step="any" placeholder="Avg $"><button class="btn sm" id="nAdd">Add</button></div><div class="hint">Negative quantity = short position.</div></div></div>
+      <div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:8px">Stocks, ETFs &amp; crypto</h2>${holdings.length ? `<div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Quantity</th><th>Average price</th><th></th></tr></thead><tbody>
+        ${holdings.map(([s, pos]) => `<tr><td class="sym">${esc(s)}</td><td><input type="number" step="any" data-hq="${esc(s)}" value="${pos.qty}" style="width:130px"></td><td><input type="number" step="any" data-ha="${esc(s)}" value="${pos.avg}" style="width:130px"></td><td class="r"><button class="btn sm ghost" data-hdel="${esc(s)}">Remove</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">No holdings.</div>'}</div>
+      <div class="card" style="margin-top:var(--gap)"><h2 style="margin-bottom:8px">Options</h2>${opts.length ? `<div class="table-wrap"><table><thead><tr><th>Contract</th><th>Contracts</th><th>Average price</th><th></th></tr></thead><tbody>
+        ${opts.map(([k, pos]) => `<tr><td class="sym">${esc(k)}</td><td><input type="number" step="1" data-oq="${esc(k)}" value="${pos.qty}" style="width:110px"></td><td><input type="number" step="any" data-oa="${esc(k)}" value="${pos.avg}" style="width:110px"></td><td class="r"><button class="btn sm ghost" data-odel="${esc(k)}">Remove</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">No options.</div>'}
+        <div class="row add-row" style="margin-top:10px"><input id="oKey" placeholder="Contract, e.g. AAPL_2026-11-20_C_350" class="wide"><input id="oQty" type="number" step="1" placeholder="Qty"><input id="oAvg" type="number" step="any" placeholder="Avg $"><button class="btn sm" id="oAdd">Add</button></div></div>
+      <div class="grid g-half" style="margin-top:var(--gap)">
+        <div class="card"><div class="card-head"><h2>Open orders</h2>${p.orders.length ? '<button class="btn sm secondary" id="ordClear">Cancel all</button>' : ''}</div>${p.orders.length ? `<table><tbody>${p.orders.map(o => `<tr><td>${esc(o.action)} ${o.qty} ${esc(o.desc || o.symbol)}</td><td class="muted">${esc(o.type)}</td><td class="r"><button class="btn sm ghost" data-ocx="${o.id}">Cancel</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty small">None.</div>'}</div>
+        <div class="card"><div class="card-head"><h2>Trade history</h2>${p.history.length ? '<button class="btn sm secondary" id="histClear">Clear all</button>' : ''}</div>${p.history.length ? `<div style="max-height:320px;overflow:auto"><table><tbody>${p.history.slice(0, 200).map(o => `<tr><td class="muted small">${when(o.filledAt || o.created)}</td><td>${esc(o.action)} ${o.qty} ${esc(o.desc || o.symbol)}</td><td class="r">${o.fillPrice != null ? money(o.fillPrice, { full: true }) : '—'}</td><td class="r"><button class="btn sm ghost" data-hx="${o.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty small">None.</div>'}</div>
+      </div></div>`;
+    const keep = () => { // pull typed values back into the draft before any change
+      p.cash = +$('#pCash').value;
+      $$('[data-hq]').forEach(i => { p.positions[i.dataset.hq].qty = +i.value; });
+      $$('[data-ha]').forEach(i => { p.positions[i.dataset.ha].avg = +i.value; });
+      $$('[data-oq]').forEach(i => { p.options[i.dataset.oq].qty = Math.round(+i.value); });
+      $$('[data-oa]').forEach(i => { p.options[i.dataset.oa].avg = +i.value; });
+    };
+    const redo = fn => () => { keep(); fn(); draw(); };
+    $$('[data-cashset]').forEach(b => b.onclick = redo(() => { p.cash = +b.dataset.cashset; $('#pCash').value = p.cash; }));
+    $('#pReset').onclick = () => { if (confirm('Clear all holdings, options, orders and history, and restore starting cash?')) { Object.assign(p, { cash: game.startingCash, positions: {}, options: {}, orders: [], history: [], snapshots: {}, tradesByDay: {}, unsettled: [] }); draw(); } };
+    $('#nAdd').onclick = redo(() => { const s = $('#nSym').value.trim().toUpperCase(), q = +$('#nQty').value, a = +$('#nAvg').value; if (!s || !q) return toast('Enter a symbol and a non-zero quantity.', true); p.positions[s] = { qty: q, avg: a || 0 }; });
+    $('#oAdd').onclick = redo(() => { const k = $('#oKey').value.trim(), q = Math.round(+$('#oQty').value), a = +$('#oAvg').value; if (!/^[A-Z.]+_\d{4}-\d{2}-\d{2}_[CP]_[\d.]+$/i.test(k) || !q) return toast('Use SYMBOL_YYYY-MM-DD_C_STRIKE (or _P_) and a whole quantity.', true); p.options[k.toUpperCase()] = { qty: q, avg: a || 0 }; });
+    $$('[data-hdel]').forEach(b => b.onclick = redo(() => { delete p.positions[b.dataset.hdel]; }));
+    $$('[data-odel]').forEach(b => b.onclick = redo(() => { delete p.options[b.dataset.odel]; }));
+    $$('[data-ocx]').forEach(b => b.onclick = redo(() => { p.orders = p.orders.filter(o => o.id !== b.dataset.ocx); }));
+    $('#ordClear')?.addEventListener('click', redo(() => { p.orders = []; }));
+    $$('[data-hx]').forEach(b => b.onclick = redo(() => { p.history = p.history.filter(o => o.id !== b.dataset.hx); }));
+    $('#histClear')?.addEventListener('click', redo(() => { p.history = []; }));
+    $('#pSave').onclick = async () => {
+      keep();
+      for (const [s, pos] of Object.entries(p.positions)) if (!pos.qty) delete p.positions[s];
+      for (const [k, pos] of Object.entries(p.options)) if (!pos.qty) delete p.options[k];
+      try { await api(`/api/admin/games/${gid}/players/${encodeURIComponent(uid)}/doc`, { method: 'PUT', body: { data: p } }); toast('Portfolio saved.'); route(); } catch (err) { toast(err.message, true); }
+    };
+    $('#pRaw').onclick = () => { keep(); rawEditor(`${p.name || 'Player'} · ${game.name}`, p, data => api(`/api/admin/games/${gid}/players/${encodeURIComponent(uid)}/doc`, { method: 'PUT', body: { data } })); };
+  };
+  draw();
 }
 
 const app = () => $('#app');

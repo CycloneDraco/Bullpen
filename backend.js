@@ -1,7 +1,7 @@
 // In-browser backend: the same /api routes the old Node server had, backed by
 // store.js (Firebase or localStorage) and Finnhub for live prices.
-import CONFIG from './config.js?v=20261026115004';
-import { store } from './store.js?v=20261026115004';
+import CONFIG from './config.js?v=20261026125806';
+import { store } from './store.js?v=20261026125806';
 export { store };
 
 const FH = CONFIG.finnhubBase || 'https://finnhub.io/api/v1';
@@ -508,7 +508,7 @@ async function loadMe() {
   // A profile the user has saved beats whatever their sign-in provider says.
   me = { watchlist: ['AAPL', 'MSFT', 'NVDA', 'SPY'], bio: '', color: '', joined: u.created || Date.now(), ...u, ...saved, id: u.id, email: u.email, provider: u.provider, emailVerified: u.emailVerified, prefs: { ...DEFAULT_PREFS, ...saved?.prefs } };
   await store.saveUser(u.id, { name: me.name, email: me.email || '', picture: me.picture || '', bio: me.bio, color: me.color, joined: me.joined, prefs: me.prefs, watchlist: me.watchlist, lastLogin: Date.now() });
-  if (!saved) await store.saveProfile(u.id, publicProfile(me)).catch(() => {});
+  await store.saveProfile(u.id, publicProfile(me)).catch(() => {});
   await ensureDefaultGame(me);
   // Admin mode: unlocked in Settings on this device, and only real if Firebase lists the account in admins/.
   let unlocked; try { unlocked = localStorage.getItem('bp_admin') === u.id; } catch {}
@@ -695,7 +695,7 @@ route('GET', '/api/games/:gid/portfolio', async ({ user, params, url }) => {
   const p = await store.getPlayer(g.id, uid);
   if (!p) throw httpError(404, 'Portfolio not found.');
   const own = uid === user.id;
-  if (!own && !g.settings.showPortfolios) throw httpError(403, 'Portfolios are private in this game.');
+  if (!own && !g.settings.showPortfolios && !user.admin) throw httpError(403, 'Portfolios are private in this game.');
   return { ...(await portfolioView(p, g, own)), owner: p.name, game: await gamePublic(g, user) };
 });
 route('POST', '/api/games/:gid/orders', async ({ user, params, body }) => {
@@ -988,8 +988,71 @@ route('POST', '/api/admin/unlock', async ({ user, body }) => {
 route('POST', '/api/admin/lock', ({ user }) => { try { localStorage.removeItem('bp_admin'); } catch {} user.admin = false; return { ok: true }; });
 route('GET', '/api/admin/users', async ({ user }) => {
   mustAdmin(user);
-  const list = await store.listProfiles();
-  return Promise.all(list.map(async pr => ({ ...pr, email: (await store.getUser(pr.id).catch(() => null))?.email || '' })));
+  const [users, profiles] = await Promise.all([store.listUsers().catch(() => []), store.listProfiles()]);
+  const ids = [...new Set([...users.map(u => u.id), ...profiles.map(p => p.id)])];
+  return ids.map(id => { const u = users.find(x => x.id === id) || {}, pr = profiles.find(x => x.id === id) || {}; return { ...u, ...pr, id, email: u.email || '', lastLogin: u.lastLogin || 0 }; })
+    .sort((a, b) => (b.lastLogin || 0) - (a.lastLogin || 0));
+});
+// Full picture of one account: private user record, public profile, and every portfolio.
+route('GET', '/api/admin/users/:uid', async ({ user, params }) => {
+  mustAdmin(user);
+  const uid = params.uid;
+  const [record, profile, games] = await Promise.all([store.getUser(uid).catch(() => null), store.getProfile(uid).catch(() => null), store.myGames(uid)]);
+  const pairs = (await Promise.all(games.map(async g => [g, await store.getPlayer(g.id, uid)]))).filter(([, p]) => p);
+  const mk = await marks(pairs.map(([, p]) => p));
+  return {
+    id: uid, record: record || {}, profile: profile || {},
+    games: pairs.map(([g, p]) => ({ gameId: g.id, name: g.settings.name, practice: !!g.sandboxOf, owner: g.owner === uid, cash: p.cash, equity: valuation(p, mk.quotes, mk.optq).equity, positions: Object.keys(p.positions).length + Object.keys(p.options || {}).length, orders: p.orders.length })),
+  };
+});
+// Account data: watchlist, alerts, badges, notifications, friends.
+route('PATCH', '/api/admin/users/:uid/data', async ({ user, params, body }) => {
+  mustAdmin(user);
+  const patch = {};
+  if (Array.isArray(body.watchlist)) patch.watchlist = [...new Set(body.watchlist.map(s => String(s).trim().toUpperCase()).filter(Boolean))].slice(0, 50);
+  if (Array.isArray(body.alerts)) patch.alerts = body.alerts;
+  if (body.badges && typeof body.badges === 'object') patch.badges = body.badges;
+  if (Array.isArray(body.notifications)) patch.notifications = body.notifications;
+  if (Array.isArray(body.friends)) patch.friends = body.friends;
+  await store.saveUser(params.uid, patch);
+  if (patch.badges) await store.saveProfile(params.uid, { badges: patch.badges }).catch(() => {});
+  if (params.uid === user.id) Object.assign(user, patch);
+  return { ok: true };
+});
+const plainObject = v => v && typeof v === 'object' && !Array.isArray(v);
+// Raw records, for anything the editors don't cover.
+route('PUT', '/api/admin/users/:uid/doc', async ({ user, params, body }) => {
+  mustAdmin(user);
+  if (!plainObject(body.data)) throw httpError(400, 'That isn’t a valid record.');
+  await store.replaceUser(params.uid, body.data);
+  if (params.uid === user.id) Object.assign(user, body.data);
+  return { ok: true };
+});
+route('GET', '/api/admin/games/:gid/players/:uid/doc', async ({ user, params }) => {
+  mustAdmin(user);
+  const p = await store.getPlayer(params.gid, params.uid);
+  if (!p) throw httpError(404, 'Portfolio not found.');
+  const g = await mustGame(params.gid), mk = await marks([p]);
+  const { id, ...doc } = p;
+  return { doc, game: { id: g.id, name: g.settings.name, startingCash: g.settings.startingCash }, value: valuation(p, mk.quotes, mk.optq) };
+});
+route('PUT', '/api/admin/games/:gid/players/:uid/doc', async ({ user, params, body }) => {
+  mustAdmin(user);
+  const p = body.data;
+  if (!plainObject(p) || typeof p.cash !== 'number' || !isFinite(p.cash) || !plainObject(p.positions)) throw httpError(400, 'A portfolio needs a number for cash and a positions object.');
+  for (const [sym, pos] of Object.entries(p.positions)) if (!plainObject(pos) || !isFinite(pos.qty) || !isFinite(pos.avg) || pos.qty === 0) throw httpError(400, `Holding ${sym} needs a non-zero quantity and an average price.`);
+  for (const [key, pos] of Object.entries(p.options || {})) { parseKey(key); if (!plainObject(pos) || !Number.isInteger(pos.qty) || pos.qty === 0 || !isFinite(pos.avg)) throw httpError(400, `Option ${key} needs a whole non-zero quantity and an average price.`); }
+  p.userId = params.uid; p.orders ||= []; p.history ||= []; p.snapshots ||= {}; p.tradesByDay ||= {}; p.options ||= {};
+  await store.savePlayer(params.gid, params.uid, p);
+  return { ok: true };
+});
+route('GET', '/api/admin/games/:gid/doc', async ({ user, params }) => { mustAdmin(user); const { id, ...doc } = await mustGame(params.gid); return doc; });
+route('PUT', '/api/admin/games/:gid/doc', async ({ user, params, body }) => {
+  mustAdmin(user);
+  const g = body.data;
+  if (!plainObject(g) || !plainObject(g.settings) || !Array.isArray(g.members) || !g.owner) throw httpError(400, 'A game needs an owner, a members list and a settings object.');
+  await store.replaceGame(params.gid, g);
+  return { ok: true };
 });
 route('PATCH', '/api/admin/users/:uid', async ({ user, params, body }) => {
   mustAdmin(user);
